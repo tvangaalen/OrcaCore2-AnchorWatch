@@ -1,0 +1,244 @@
+"""Tests for anchor_watch.py with simulated Core data:  .venv\\Scripts\\python.exe -m unittest test_anchor_watch"""
+
+import tempfile, unittest
+from pathlib import Path
+
+import io, json, os, time, urllib.error
+from unittest import mock
+
+from anchor_watch import AnchorWatch, TileCache, dist_bearing_m, offset
+from orca_reader import Store
+
+LAT, LON = 39.0, 1.5        # an arbitrary point at sea; the tests only use positions relative to it
+
+
+class Sim:
+    def __init__(self):
+        self.store = Store(); self.store.status["sensors"]["connected"] = True
+        self.dir = tempfile.TemporaryDirectory(); self.file = Path(self.dir.name) / "state.json"
+        self.watch = AnchorWatch(self.store, self.file)
+        self.t = 1_000_000.0
+
+    def put(self, **kv):
+        for k, v in kv.items(): self.store.values["sensors"][k.replace("__", ".")] = (v, self.t)
+
+    def boat(self, lat, lon, src="4", heading_deg=0.0, frozen=True):
+        self.put(**{f"navigation__position__{src}__latitude": lat, f"navigation__position__{src}__longitude": lon,
+                    f"navigation__gnss__{src}__method": 1,
+                    "navigation__heading__254__heading": heading_deg / 57.29577951308232, "navigation__heading__254__reference": 0})
+        if frozen: self.put(navigation__position__254__latitude=LAT, navigation__position__254__longitude=LON,   # Core keeps its frozen fix
+                            navigation__motion__254__stationary=1)
+
+    def run(self, seconds, **boat):
+        for _ in range(int(seconds)):
+            if boat: self.boat(**boat)
+            else: self.put(navigation__position__254__latitude=LAT, navigation__position__254__longitude=LON, navigation__motion__254__stationary=1)
+            self.watch.tick(self.t); self.t += 1
+
+
+class AnchorWatchTest(unittest.TestCase):
+    def setUp(self):
+        self.s = Sim(); self.w = self.s.watch
+        self.s.run(2, lat=LAT, lon=LON)
+        self.w.boat["pos"]  # position known
+        self.w.command({"action": "drop", "mode": "here", "radius": 30})
+
+    def tearDown(self): self.s.dir.cleanup()
+
+    def test_geometry(self):
+        lat, lon = offset(LAT, LON, 90, 100)
+        d, b = dist_bearing_m(LAT, LON, lat, lon)
+        self.assertAlmostEqual(d, 100, delta=0.05); self.assertAlmostEqual(b, 90, delta=0.1)
+
+    def test_swinging_inside_circle_no_alarm(self):
+        for brg in range(0, 360, 30):
+            lat, lon = offset(LAT, LON, brg, 25); self.s.run(5, lat=lat, lon=lon)
+        self.assertEqual(self.w.alarms, {})
+        self.assertAlmostEqual(self.w.max_dist, 25, delta=0.1)
+
+    def test_drag_needs_confirm_time(self):
+        lat, lon = offset(LAT, LON, 200, 35)
+        self.s.run(5, lat=lat, lon=lon)                     # GPS jump outside for 5 s: below 10 s confirm
+        self.assertNotIn("drag", self.w.alarms)
+        self.s.run(3, lat=LAT, lon=LON); self.s.run(11, lat=lat, lon=lon)
+        self.assertIn("drag", self.w.alarms); self.assertTrue(self.w.sounding(self.s.t))
+        self.s.run(1, lat=LAT, lon=LON)
+        self.assertNotIn("drag", self.w.alarms)
+
+    def test_uses_raw_gps_not_frozen_core_position(self):
+        lat, lon = offset(LAT, LON, 0, 60)                  # boat dragged 60 m, Core 254 still says LAT/LON
+        self.s.run(12, lat=lat, lon=lon)
+        self.assertEqual(self.w.boat["pos"]["source"], "4")
+        self.assertIn("drag", self.w.alarms)
+
+    def test_source_failover(self):
+        self.s.t += 20                                      # source 4 goes stale
+        lat, lon = offset(LAT, LON, 90, 10)
+        self.s.run(2, lat=lat, lon=lon, src="127")
+        self.assertEqual(self.w.boat["pos"]["source"], "127")
+
+    def test_gps_lost(self):
+        self.s.t += 11
+        self.s.run(31)                                      # raw receivers silent, only the frozen 254 keeps updating
+        self.assertIsNone(self.w.boat["pos"])
+        self.assertIn("gps", self.w.alarms)
+
+    def test_core_position_used_when_moving(self):
+        self.s.t += 11
+        self.s.put(navigation__motion__254__stationary=0, navigation__position__254__latitude=LAT, navigation__position__254__longitude=LON)
+        self.w.tick(self.s.t)
+        self.assertEqual(self.w.boat["pos"]["source"], "254")
+
+    def test_core_lost(self):
+        self.s.store.status["sensors"]["connected"] = False
+        for _ in range(31): self.w.tick(self.s.t); self.s.t += 1
+        self.assertIn("core", self.w.alarms); self.assertNotIn("gps", self.w.alarms)
+
+    def test_silence_then_retrigger(self):
+        lat, lon = offset(LAT, LON, 0, 50)
+        self.s.run(11, lat=lat, lon=lon)
+        import anchor_watch; real = anchor_watch.time.time; anchor_watch.time.time = lambda: self.s.t
+        try: self.w.command({"action": "silence", "minutes": 5})
+        finally: anchor_watch.time.time = real
+        self.assertFalse(self.w.sounding(self.s.t))
+        self.s.run(1, lat=LAT, lon=LON)                     # back inside: alarm clears, silence resets
+        self.s.run(11, lat=lat, lon=lon)
+        self.assertTrue(self.w.sounding(self.s.t))
+
+    def test_drop_ahead_uses_heading_and_bow_offset(self):
+        self.w.command({"action": "settings", "settings": {"bow_offset": 5}})
+        self.s.run(1, lat=LAT, lon=LON, heading_deg=270)
+        self.w.command({"action": "drop", "mode": "ahead", "distance": 25, "radius": 40})
+        d, b = dist_bearing_m(LAT, LON, self.w.anchor["lat"], self.w.anchor["lon"])
+        self.assertAlmostEqual(d, 30, delta=0.1); self.assertAlmostEqual(b, 270, delta=0.5)
+
+    def test_depth_and_wind_alarms(self):
+        self.w.command({"action": "settings", "settings": {"min_depth": 3, "max_wind_kn": 25}})
+        self.s.put(environment__depth__35__belowTransducer=2.5, **{"environment__wind__254__0__speed": 15.0})  # 15 m/s = 29 kn
+        self.s.run(11, lat=LAT, lon=LON)
+        self.assertIn("depth", self.w.alarms); self.assertIn("wind", self.w.alarms)
+
+    def test_state_survives_restart(self):
+        self.s.run(6, lat=LAT, lon=LON); self.w.save()
+        w2 = AnchorWatch(self.s.store, self.s.file)
+        self.assertEqual(w2.anchor["radius"], 30); self.assertGreater(len(w2.track), 0)
+
+    def test_bad_input_rejected(self):
+        for c in ({"action": "radius", "radius": 1}, {"action": "radius", "radius": "x"}, {"action": "nope"},
+                  {"action": "settings", "settings": {"confirm_s": -1}}):
+            with self.assertRaises(ValueError): self.w.command(c)
+
+
+class TileCacheTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory(); self.cache = TileCache(self.dir.name); self.calls = []
+
+    def tearDown(self): self.dir.cleanup()
+
+    def fake(self, result):
+        def urlopen(req, timeout):
+            self.calls.append(req.full_url)
+            if isinstance(result, Exception): raise result
+            return io.BytesIO(result)
+        return mock.patch("anchor_watch.urllib.request.urlopen", urlopen)
+
+    def test_fetch_then_cache(self):
+        with self.fake(b"PNG1"): self.assertEqual(self.cache.get("osm", 16, 33034, 25049), (b"PNG1", "image/png"))
+        with self.fake(OSError("offline")): self.assertEqual(self.cache.get("osm", 16, 33034, 25049)[0], b"PNG1")
+        self.assertEqual(self.calls, ["https://tile.openstreetmap.org/16/33034/25049.png"])
+
+    def test_satellite_url_is_z_y_x(self):
+        with self.fake(b"JPG"): self.assertEqual(self.cache.get("satellite", 3, 4, 2)[1], "image/jpeg")
+        self.assertTrue(self.calls[0].endswith("/tile/3/2/4"))
+
+    def test_stale_tile_served_when_offline(self):
+        with self.fake(b"OLD"): self.cache.get("osm", 10, 1, 1)
+        f = Path(self.dir.name, "osm", "10", "1", "1.png"); old = time.time() - 40 * 86400; os.utime(f, (old, old))
+        with self.fake(OSError("offline")): self.assertEqual(self.cache.get("osm", 10, 1, 1)[0], b"OLD")
+        with self.fake(b"NEW"): self.assertEqual(self.cache.get("osm", 10, 1, 1)[0], b"OLD")   # backs off 30 s after a failure
+
+    def test_missing_tile_remembered(self):
+        with self.fake(urllib.error.HTTPError("u", 404, "nf", {}, None)): self.assertIsNone(self.cache.get("seamark", 12, 5, 5))
+        with self.fake(b"X"): self.assertIsNone(self.cache.get("seamark", 12, 5, 5))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_depth_is_wms_with_tile_bbox(self):
+        from anchor_watch import tile_bbox_3857
+        self.assertEqual(tile_bbox_3857(0, 0, 0), "-20037508.34,-20037508.34,20037508.34,20037508.34")
+        minx, miny, maxx, maxy = map(float, tile_bbox_3857(16, 33034, 25110).split(","))   # tile over the anchorage
+        self.assertAlmostEqual(maxx - minx, 611.5, delta=0.1); self.assertLess(minx, 163006); self.assertGreater(maxx, 163006)
+        self.assertLess(miny, 4682456); self.assertGreater(maxy, 4682456)
+        with self.fake(b"PNG"): self.cache.get("depth", 16, 33034, 25110)
+        self.assertIn("request=GetMap", self.calls[0]); self.assertIn("bbox=" + tile_bbox_3857(16, 33034, 25110), self.calls[0])
+        self.assertIn("layers=openseamap:tracks_10m,openseamap:contour2,openseamap:contour", self.calls[0])
+
+    def test_out_of_range_rejected(self):
+        with self.fake(b"X"):
+            self.assertIsNone(self.cache.get("osm", 20, 0, 0)); self.assertIsNone(self.cache.get("osm", 2, 4, 0))
+        self.assertEqual(self.calls, [])
+
+
+class ParseMessageTest(unittest.TestCase):
+    def test_raw_backslash_from_core(self):
+        from orca_reader import parse_message
+        bs = chr(92)   # one backslash, spelled out so no tool or editor can collapse it
+        # as the Core sent it on 2026-10-12: a lone backslash in an AIS destination, next to valid escapes
+        raw = ('{"values": {"ais.x.224672000.position.destination": "IBIZA' + bs + 'FORMENTERA    ", '
+               '"a": "x' + bs + bs + 'y", "b": "' + bs + 'u00e9' + bs + 'n"}}')
+        v = parse_message(raw)["values"]
+        self.assertEqual(v["ais.x.224672000.position.destination"], "IBIZA" + bs + "FORMENTERA    ")
+        self.assertEqual(v["a"], "x" + bs + "y"); self.assertEqual(v["b"], chr(0xE9) + chr(10))   # valid escapes untouched
+
+    def test_other_errors_still_raise(self):
+        from orca_reader import parse_message
+        with self.assertRaises(json.JSONDecodeError): parse_message('{"a": ')
+
+
+class MyMmsiTest(unittest.TestCase):
+    def ais(self, mmsi, lat, lon, t=1000.0):
+        return {f"ais.x.{mmsi}.position.latitude": (lat, t), f"ais.x.{mmsi}.position.longitude": (lon, t),
+                f"ais.x.{mmsi}.position.name": ("BOAT " + mmsi, t)}
+
+    def test_my_mmsi_never_shown_even_far_away(self):
+        from anchor_watch import read_ais
+        far = offset(LAT, LON, 90, 300)
+        ais = {**self.ais("123456789", *far), **self.ais("987654321", *offset(LAT, LON, 0, 75))}
+        self.assertEqual([t["mmsi"] for t in read_ais(ais, 1001, LAT, LON, "123456789")], ["987654321"])
+
+    def test_without_my_mmsi_close_target_is_suggested(self):
+        from anchor_watch import read_ais
+        near = []
+        ais = {**self.ais("123456789", *offset(LAT, LON, 40, 2.5)), **self.ais("987654321", *offset(LAT, LON, 0, 75))}
+        shown = read_ais(ais, 1001, LAT, LON, "", near)
+        self.assertEqual([t["mmsi"] for t in shown], ["987654321"]); self.assertEqual(near[0]["mmsi"], "123456789")
+
+    def test_setting_validation_and_state(self):
+        s = Sim(); w = s.watch
+        try:
+            with self.assertRaises(ValueError): w.command({"action": "settings", "settings": {"own_mmsi": "12345"}})
+            with self.assertRaises(ValueError): w.command({"action": "settings", "settings": {"own_mmsi": "24400147x"}})
+            w.command({"action": "settings", "settings": {"own_mmsi": " 123456789 "}})
+            self.assertEqual(w.settings["own_mmsi"], "123456789")
+            s.store.values["ais"].update(self.ais("123456789", *offset(LAT, LON, 40, 2.5), t=time.time()))   # state() ages AIS on the real clock
+            s.run(1, lat=LAT, lon=LON)
+            st = w.state(); self.assertEqual(st["ais"], []); self.assertIsNone(st["own_candidate"])
+            w.command({"action": "settings", "settings": {"own_mmsi": "111111111"}})   # another MMSI: ours shows again
+            self.assertEqual([t["mmsi"] for t in w.state()["ais"]], ["123456789"])
+            w.command({"action": "settings", "settings": {"own_mmsi": ""}})
+            self.assertEqual(w.state()["own_candidate"]["mmsi"], "123456789")
+        finally: s.dir.cleanup()
+
+    def test_new_track_resets_track_and_max_swing(self):
+        s = Sim(); w = s.watch
+        try:
+            s.run(12, lat=LAT, lon=LON); w.command({"action": "drop", "mode": "here", "radius": 30})
+            s.run(12, lat=offset(LAT, LON, 0, 20)[0], lon=LON)
+            self.assertGreater(w.state()["track_points"], 0); self.assertGreater(w.max_dist, 19)
+            gen = w.track_gen; w.command({"action": "clear_track"})
+            st = w.state(); self.assertEqual(st["track_points"], 0); self.assertEqual(st["max_dist"], 0); self.assertEqual(st["track_gen"], gen + 1)
+            self.assertIsNotNone(w.anchor)                   # the watch itself carries on
+        finally: s.dir.cleanup()
+
+
+if __name__ == "__main__":
+    unittest.main()
