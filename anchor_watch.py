@@ -27,7 +27,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, str
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -175,6 +175,10 @@ class Pushover:
         except FileNotFoundError: self.cfg = None; return f"{self.cfg_file.name} not found"
         except Exception as e: self.cfg = None; return f"{self.cfg_file.name}: {type(e).__name__}: {e}"
         tok, usr = str(d.get("app_token", "")).strip(), str(d.get("user_key", "")).strip()
+        if any(self.KEY_RE.match(str(k)) for k in d):          # a key pasted over a field name instead of after it
+            self.cfg = None
+            return (f"{self.cfg_file.name}: a key was pasted in place of a field name; keep the names \"app_token\" and "
+                    f"\"user_key\" and put each key after the colon, between quotes")
         if not (self.KEY_RE.match(tok) and self.KEY_RE.match(usr)):
             self.cfg = None; return f"{self.cfg_file.name}: app_token and user_key must each be the 30-character Pushover keys"
         self.cfg = {**d, "app_token": tok, "user_key": usr}; return None

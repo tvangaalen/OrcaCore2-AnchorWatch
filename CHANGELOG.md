@@ -6,6 +6,10 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ## 1.1 — Phone alerts
 
+### 1.1.1
+- `pushover.json` with a key pasted in place of a field name (instead of after `"app_token":` / `"user_key":`) now
+  gets a message that says exactly that, instead of the general "30-character keys" one. Seen during setup.
+
 ### 1.1.0
 - **Push alerts through Pushover** (`Pushover` in `anchor_watch.py`), so an alarm reaches the phone ashore with the
   page closed: anchor drag as an **emergency** message that repeats every minute until acknowledged (and can be a

@@ -341,6 +341,9 @@ class PushoverTest(unittest.TestCase):
     def test_key_file_validation(self):
         self.f.write_text(json.dumps({"app_token": "short", "user_key": self.USR}), encoding="utf-8")
         self.assertIn("30-character", self.p.reload()); self.assertFalse(self.p.configured)
+        # keys pasted over the field names, placeholders left as values
+        self.f.write_text(json.dumps({self.TOK: "replace with the API token", self.USR: "replace with your user key"}), encoding="utf-8")
+        self.assertIn("in place of a field name", self.p.reload()); self.assertFalse(self.p.configured)
         self.f.unlink(); self.assertIn("not found", self.p.reload())
 
 
