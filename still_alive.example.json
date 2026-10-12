@@ -1,0 +1,4 @@
+{
+  "ping_url": "https://hc-ping.com/replace-with-your-check-uuid",
+  "api_key": "optional: a read-write API key of the healthchecks.io project, so the app can set the check's period"
+}

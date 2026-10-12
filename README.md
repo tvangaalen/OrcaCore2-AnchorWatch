@@ -34,6 +34,67 @@ the page and change the watch.
 On the iPhone, *Share → Add to Home Screen* gives the app its own icon and a full-screen window. HTTPS also lets the
 page keep the screen awake (Wake Lock) while sound is on.
 
+### Remote access (UniFi Teleport)
+
+Away from the boat, connect the iPhone with **UniFi Teleport** (WiFiman app) and open the same address,
+`https://<PC LAN address>:8766/`. Teleport is a WireGuard VPN run by the boat's UniFi router: it works although
+both internet links (Starlink and 5G) sit behind carrier NAT, the page and its certificate stay exactly the same, and
+the server is never reachable from the internet. Teleport clients arrive from their own subnet (192.168.2.x), so the
+Windows Firewall rule for Python must allow remote addresses beyond the local subnet on the *Private* profile
+(the default "allow" rule does). Note that Teleport gives the phone the whole boat LAN, not only this app.
+
+Do not port-forward the server or put it behind a public tunnel: it has no login.
+
+### Phone alerts ashore (Pushover)
+
+The PC pushes alarms to the iPhone through [Pushover](https://pushover.net), so they arrive with the page closed,
+the phone locked and without Teleport:
+
+| Alarm | Pushover priority |
+|---|---|
+| Anchor drag | **Emergency**: repeats every minute (for up to an hour) until acknowledged on the phone |
+| GPS lost, no data from the Core, depth, wind | High |
+| Alarm cleared | Normal (and the emergency for it is cancelled) |
+
+Silencing the alarm in the app or raising the anchor also cancels the repeating emergency. Each alert links back to
+the app (open it over Teleport).
+
+Setup, once:
+
+1. Install Pushover on the iPhone (one-time purchase after the trial) and sign in.
+2. On [pushover.net](https://pushover.net), copy your **user key**, and create an application named *Anchor Watch*
+   ([apps/build](https://pushover.net/apps/build)) to get its **API token**.
+3. Copy `pushover.example.json` to `pushover.json` next to `anchor_watch.py` and fill in both keys
+   (`pushover.json` is in `.gitignore`; never commit it). Optional: `emergency_sound`, `device`.
+4. In the app, under *Alarm settings*, press **Send test** (no restart needed).
+5. In the Pushover iPhone app, turn on **Critical Alerts** for emergency-priority messages, so an anchor drag sounds
+   even in silent mode and Focus / Do Not Disturb.
+
+*Phone alerts (Pushover)* in Alarm settings switches them off. Alerts need the PC and its internet link: if either is
+down, nothing can be sent. That is what the still-alive check is for.
+
+### Still-alive check (healthchecks.io)
+
+The PC pings an outside monitor, [healthchecks.io](https://healthchecks.io) (free plan), every 5 minutes. If the pings
+stop for longer than the **Still-alive check** interval (Alarm settings, default **60 min**, 0 = off), because the
+PC, this program or the boat's internet went down, healthchecks.io alerts the phone through its own Pushover
+integration. Pinging more often than the interval means one lost ping over a flaky link causes no false alarm.
+
+Setup, once:
+
+1. Create a free account on healthchecks.io and add a check named *Anchor Watch*. Set **Period** to the same value as
+   the app's interval (60 min) and **Grace** to 1 min.
+2. Under *Integrations*, add **Pushover** and choose the priority for "down" (Emergency makes it repeat until
+   acknowledged) and for "up". Make sure the check uses that integration.
+3. Copy `still_alive.example.json` to `still_alive.json` (git-ignored) and paste the check's **ping URL**.
+   Optional: a **read-write API key** of the project (*Settings → API Access*); the app then sets the check's period
+   itself whenever you change the interval, and pauses the check when you set 0.
+4. Press **Ping now** under Alarm settings; the check turns green on the website.
+
+Without an API key, change the period on the website whenever you change the interval in the app (the page reminds
+you). If you shut the watch PC down on purpose, pause the check on healthchecks.io (or set the interval to 0 first
+when the API key is in place), otherwise it alerts after the interval.
+
 ### What it does
 
 - **The watch runs on the PC, not in the browser.** Alarms are evaluated every second and beep through the PC

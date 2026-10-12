@@ -6,7 +6,7 @@ from pathlib import Path
 import io, json, os, time, urllib.error
 from unittest import mock
 
-from anchor_watch import AnchorWatch, TileCache, dist_bearing_m, offset
+from anchor_watch import AnchorWatch, Pushover, StillAlive, TileCache, dist_bearing_m, offset
 from orca_reader import Store
 
 LAT, LON = 39.0, 1.5        # an arbitrary point at sea; the tests only use positions relative to it
@@ -237,6 +237,177 @@ class MyMmsiTest(unittest.TestCase):
             gen = w.track_gen; w.command({"action": "clear_track"})
             st = w.state(); self.assertEqual(st["track_points"], 0); self.assertEqual(st["max_dist"], 0); self.assertEqual(st["track_gen"], gen + 1)
             self.assertIsNotNone(w.anchor)                   # the watch itself carries on
+        finally: s.dir.cleanup()
+
+
+class FakeNotifier:
+    configured = True
+    last_error = last_sent = None
+
+    def __init__(self): self.calls = []
+    def alarm(self, key, title, message, when): self.calls.append(("alarm", key, title, message))
+    def cleared(self, key, title, message, when): self.calls.append(("cleared", key))
+    def cancel(self, key=None): self.calls.append(("cancel", key))
+    def reload(self): return None
+    def test(self): self.calls.append(("test",))
+
+
+class PushHooksTest(unittest.TestCase):
+    def setUp(self):
+        self.s = Sim(); self.w = self.s.watch; self.n = self.w.notifier = FakeNotifier()
+        self.s.run(2, lat=LAT, lon=LON); self.w.command({"action": "drop", "mode": "here", "radius": 30})
+        self.n.calls.clear()
+
+    def tearDown(self): self.s.dir.cleanup()
+
+    def drag(self, seconds=11): self.s.run(seconds, lat=offset(LAT, LON, 0, 50)[0], lon=LON)
+
+    def test_drag_pushes_once_then_clears(self):
+        self.drag(30)
+        alarms = [c for c in self.n.calls if c[0] == "alarm"]
+        self.assertEqual(len(alarms), 1); self.assertEqual(alarms[0][1], "drag")
+        self.assertIn("50 m from anchor (limit 30 m)", alarms[0][3])
+        self.s.run(1, lat=LAT, lon=LON)
+        self.assertEqual(self.n.calls[-1], ("cleared", "drag"))
+
+    def test_no_push_before_confirm_time(self):
+        self.drag(5); self.assertEqual(self.n.calls, [])
+
+    def test_silence_and_raise_cancel_the_emergency(self):
+        self.drag()
+        with mock.patch("anchor_watch.time.time", lambda: self.s.t): self.w.command({"action": "silence", "minutes": 5})
+        self.assertEqual(self.n.calls[-1], ("cancel", None))
+        self.w.command({"action": "raise"}); self.assertEqual(self.n.calls[-1], ("cancel", None))
+
+    def test_switched_off(self):
+        self.w.command({"action": "settings", "settings": {"push_alerts": False}})
+        self.drag(); self.assertEqual([c for c in self.n.calls if c[0] == "alarm"], [])
+
+    def test_push_test_command(self):
+        self.w.command({"action": "push_test"}); self.assertEqual(self.n.calls[-1], ("test",))
+
+
+class PushoverTest(unittest.TestCase):
+    TOK, USR = "a" * 30, "u" * 30
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory(); self.f = Path(self.dir.name, "pushover.json")
+        self.f.write_text(json.dumps({"app_token": self.TOK, "user_key": self.USR}), encoding="utf-8")
+        self.events = []
+        self.p = Pushover(self.f, "https://192.168.1.10:8766/", on_event=lambda t, k: self.events.append(t), start=False)
+        self.p.BACKOFF_S = (0, 0, 0); self.posts = []
+
+    def tearDown(self): self.dir.cleanup()
+
+    def run_queue(self, responses):
+        def post(path, fields):
+            self.posts.append((path, fields)); r = responses.pop(0)
+            if isinstance(r, Exception): raise r
+            return r
+        with mock.patch.object(self.p, "_post", post):
+            while not self.p.q.empty(): self.p.process(self.p.q.get())
+
+    def test_emergency_drag_then_cancel_by_receipt(self):
+        self.p.alarm("drag", "Anchor drag", "50 m", 1000); self.p.cancel()
+        self.run_queue([{"status": 1, "receipt": "R123"}, {"status": 1}])
+        path, f = self.posts[0]
+        self.assertEqual(path, "messages.json")
+        self.assertEqual((f["priority"], f["retry"], f["expire"], f["token"], f["user"]), (2, 60, 3600, self.TOK, self.USR))
+        self.assertEqual(f["url"], "https://192.168.1.10:8766/")
+        self.assertEqual(self.posts[1], ("receipts/R123/cancel.json", {"token": self.TOK}))
+        self.assertEqual(self.p.receipts, {})
+
+    def test_cleared_cancels_and_sends_normal_message(self):
+        self.p.receipts["drag"] = "R9"; self.p.cleared("drag", "Cleared", "ok", 1000)
+        self.run_queue([{"status": 1}, {"status": 1}])
+        self.assertEqual(self.posts[0][0], "receipts/R9/cancel.json")
+        self.assertEqual(self.posts[1][1]["priority"], 0); self.assertNotIn("retry", self.posts[1][1])
+
+    def test_gps_lost_is_high_priority_not_emergency(self):
+        self.p.alarm("gps", "GPS", "lost", 1000); self.run_queue([{"status": 1}])
+        self.assertEqual(self.posts[0][1]["priority"], 1); self.assertNotIn("retry", self.posts[0][1])
+
+    def test_network_errors_are_retried(self):
+        self.p.alarm("drag", "Anchor drag", "x", 1000)
+        self.run_queue([OSError("no route"), OSError("no route"), {"status": 1, "receipt": "R1"}])
+        self.assertEqual(len(self.posts), 3); self.assertIsNone(self.p.last_error); self.assertEqual(self.events, [])
+
+    def test_bad_key_is_not_retried_and_logged(self):
+        err = urllib.error.HTTPError("u", 400, "Bad Request", {}, io.BytesIO(b'{"errors":["application token is invalid"]}'))
+        self.p.alarm("drag", "Anchor drag", "x", 1000); self.run_queue([err])
+        self.assertEqual(len(self.posts), 1); self.assertIn("application token is invalid", self.p.last_error)
+        self.assertTrue(self.events and "not delivered" in self.events[0])
+
+    def test_key_file_validation(self):
+        self.f.write_text(json.dumps({"app_token": "short", "user_key": self.USR}), encoding="utf-8")
+        self.assertIn("30-character", self.p.reload()); self.assertFalse(self.p.configured)
+        self.f.unlink(); self.assertIn("not found", self.p.reload())
+
+
+class StillAliveTest(unittest.TestCase):
+    UUID = "0f9a3c2e-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory(); self.f = Path(self.dir.name, "still_alive.json")
+        self.minutes = 60.0; self.events = []; self.reqs = []; self.fail = False
+
+    def tearDown(self): self.dir.cleanup()
+
+    def make(self, api_key=""):
+        self.f.write_text(json.dumps({"ping_url": f"https://hc-ping.com/{self.UUID}", "api_key": api_key}), encoding="utf-8")
+        a = StillAlive(self.f, lambda: self.minutes, on_event=lambda t, k: self.events.append((k, t)), start=False)
+        def request(url, data=None, headers=None):
+            self.reqs.append((url, data, headers))
+            if self.fail: raise OSError("network down")
+            return 200, b"OK"
+        a._request = request
+        return a
+
+    def pings(self): return [r for r in self.reqs if r[0].startswith("https://hc-ping.com/")]
+
+    def test_pings_every_5_min_for_a_60_min_interval(self):
+        a = self.make()
+        for t in range(0, 3601, 30): a.step(1000 + t)
+        self.assertEqual(len(self.pings()), 13)                     # t = 0, 300, ..., 3600
+        self.assertEqual(a.ping_every(60), 300); self.assertEqual(a.ping_every(6), 120); self.assertEqual(a.ping_every(1), 30)
+
+    def test_without_api_key_tells_what_to_set(self):
+        a = self.make(); a.step(1000)
+        self.assertIn("60 min", a.sync_note); self.assertEqual(len(self.reqs), 1)    # only the ping, no API call
+
+    def test_api_key_syncs_period_and_pauses_at_zero(self):
+        a = self.make(api_key="k" * 32); a.step(1000)
+        url, data, hdr = self.reqs[0]
+        self.assertEqual(url, f"https://healthchecks.io/api/v3/checks/{self.UUID}")
+        self.assertEqual(json.loads(data), {"timeout": 3600, "grace": 60}); self.assertEqual(hdr["X-Api-Key"], "k" * 32)
+        self.assertIsNone(a.sync_note)
+        self.minutes = 0; a.poke(); a.step(2000)
+        self.assertEqual(self.reqs[-1][0], f"https://healthchecks.io/api/v3/checks/{self.UUID}/pause")
+        n = len(self.reqs); a.step(5000); self.assertEqual(len(self.reqs), n)       # off: no more pings
+        self.minutes = 30; a.poke(); a.step(6000)
+        self.assertEqual(json.loads(self.reqs[-2][1])["timeout"], 1800); self.assertTrue(self.reqs[-1][0].startswith("https://hc-ping.com/"))
+
+    def test_failed_pings_are_logged_once_and_recovery_too(self):
+        a = self.make(); self.fail = True
+        for t in (0, 300, 600): a.step(1000 + t)
+        self.assertEqual([k for k, _ in self.events], ["warn"]); self.assertIn("network down", a.last_error)
+        self.fail = False; a.step(1900)
+        self.assertEqual([k for k, _ in self.events], ["warn", "ok"]); self.assertIsNone(a.last_error)
+
+    def test_config_validation(self):
+        self.f.write_text(json.dumps({"ping_url": "http://hc-ping.com/x"}), encoding="utf-8")
+        a = StillAlive(self.f, lambda: 60, start=False)
+        self.assertFalse(a.configured); self.assertIn("https://", a.reload())
+        self.f.unlink(); self.assertIn("not found", a.reload())
+
+    def test_setting_change_pokes_the_check(self):
+        s = Sim(); w = s.watch
+        try:
+            w.alive = a = self.make(); a.step(1000); a.synced = 60.0
+            with self.assertRaises(ValueError): w.command({"action": "settings", "settings": {"alive_minutes": 5000}})
+            w.command({"action": "settings", "settings": {"alive_minutes": 15}})
+            self.assertIsNone(a.synced); self.assertEqual(w.settings["alive_minutes"], 15)
+            self.assertEqual(w.state()["alive"]["every_s"], 300)
         finally: s.dir.cleanup()
 
 

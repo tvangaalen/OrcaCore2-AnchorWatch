@@ -17,7 +17,7 @@ Map tiles (OpenStreetMap, OpenSeaMap seamarks, Esri satellite) are fetched by th
 areas viewed while online still show offline. Only tiles a page asks for are fetched; nothing is bulk-downloaded.
 """
 
-import argparse, asyncio, ipaddress, json, logging, math, os, re, ssl, sys, threading, time, urllib.error, urllib.request
+import argparse, asyncio, ipaddress, json, logging, math, os, queue, re, ssl, sys, threading, time, urllib.error, urllib.parse, urllib.request
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,7 +27,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, str
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -46,10 +46,13 @@ DEFAULTS = {
     "gps_sources": "4,127,3", # raw GNSS sources in order of preference (254 is a last resort)
     "own_mmsi": "",           # "My MMSI": this boat's AIS, never shown as a target; empty = hide any target within 10 m of our GPS
     "pc_sound": True,         # beep on this PC while an alarm sounds
+    "push_alerts": True,      # send alarms to the phone through Pushover (needs pushover.json)
+    "alive_minutes": 60.0,    # still-alive check: alert from outside after this long without a sign of life, 0 = off
     "track_hours": 24,
 }
 SETTING_LIMITS = {"default_radius": (5, 2000), "confirm_s": (0, 600), "gps_timeout_s": (5, 600), "core_timeout_s": (5, 600),
-                  "min_depth": (0, 500), "max_wind_kn": (0, 150), "bow_offset": (-50, 50), "track_hours": (1, 72)}
+                  "min_depth": (0, 500), "max_wind_kn": (0, 150), "bow_offset": (-50, 50), "track_hours": (1, 72),
+                  "alive_minutes": (0, 1440)}
 
 # ---------------------------------------------------------------- geometry (flat earth is fine for < a few km)
 
@@ -141,6 +144,194 @@ def read_ais(ais, now, lat, lon, own_mmsi="", near_us=None):
                     "sog": round(tg["SOG"] * KN, 1) if num(tg.get("SOG")) else None, "age": round(tg["age"])})
     return sorted(out, key=lambda x: x["dist"])
 
+# ---------------------------------------------------------------- push alerts (Pushover)
+
+
+class Pushover:
+    """Sends alarms to the phone through Pushover (https://pushover.net/api).
+
+    Keys come from a local JSON file that is never committed: {"app_token": "...", "user_key": "..."}.
+    Messages go out from one worker thread, in order, with retries, so a slow or absent internet link never delays the
+    alarm checks. An emergency message (priority 2) repeats on the phone until it is acknowledged; its receipt is kept
+    so it can be cancelled when the alarm clears, is silenced in the app, or the anchor is raised.
+    """
+    API = "https://api.pushover.net/1"
+    PRIORITY = {"drag": 2, "gps": 1, "core": 1, "depth": 1, "wind": 1}   # 2 = emergency, 1 = high
+    RETRY_S, EXPIRE_S = 60, 3600                                        # emergency: repeat every minute for an hour
+    KEY_RE = re.compile(r"^[A-Za-z0-9]{30}$")
+    BACKOFF_S = (5, 15, 45)
+
+    def __init__(self, cfg_file, page_url=None, on_event=None, start=True):
+        self.cfg_file, self.page_url = Path(cfg_file), page_url
+        self.on_event = on_event or (lambda text, kind: None)
+        self.cfg, self.receipts, self.q = None, {}, queue.Queue()
+        self.last_error = None; self.last_sent = None
+        self.reload()
+        if start: threading.Thread(target=self._worker, daemon=True).start()
+
+    def reload(self):
+        """(Re)reads the key file; returns an error text, or None when it is usable."""
+        try: d = json.loads(self.cfg_file.read_text(encoding="utf-8"))
+        except FileNotFoundError: self.cfg = None; return f"{self.cfg_file.name} not found"
+        except Exception as e: self.cfg = None; return f"{self.cfg_file.name}: {type(e).__name__}: {e}"
+        tok, usr = str(d.get("app_token", "")).strip(), str(d.get("user_key", "")).strip()
+        if not (self.KEY_RE.match(tok) and self.KEY_RE.match(usr)):
+            self.cfg = None; return f"{self.cfg_file.name}: app_token and user_key must each be the 30-character Pushover keys"
+        self.cfg = {**d, "app_token": tok, "user_key": usr}; return None
+
+    @property
+    def configured(self): return self.cfg is not None
+
+    def alarm(self, key, title, message, when):
+        self.q.put(("send", key, {"title": title, "message": message, "priority": self.PRIORITY.get(key, 1), "timestamp": int(when)}))
+
+    def cleared(self, key, title, message, when):
+        self.q.put(("cancel", key, None))
+        self.q.put(("send", None, {"title": title, "message": message, "priority": 0, "timestamp": int(when)}))
+
+    def cancel(self, key=None):
+        """Stops the repeating emergency for one alarm, or (no key) for all of them."""
+        self.q.put(("cancel", key or "*", None))
+
+    def test(self):
+        self.q.put(("send", None, {"title": "Anchor Watch test", "priority": 0, "timestamp": int(time.time()),
+                                   "message": "Push alerts work. Anchor drag alarms arrive as emergency alerts that repeat until acknowledged."}))
+
+    def _post(self, path, fields):
+        req = urllib.request.Request(f"{self.API}/{path}", data=urllib.parse.urlencode(fields).encode(), method="POST",
+                                     headers={"User-Agent": f"OrcaCore2-AnchorWatch/{VERSION}"})
+        with urllib.request.urlopen(req, timeout=15) as r: return json.loads(r.read() or b"{}")
+
+    def _do(self, op, key, msg):
+        if op == "cancel":
+            for k in (list(self.receipts) if key == "*" else [key]):
+                receipt = self.receipts.get(k)
+                if receipt: self._post(f"receipts/{receipt}/cancel.json", {"token": self.cfg["app_token"]})
+                self.receipts.pop(k, None)
+            return
+        fields = {"token": self.cfg["app_token"], "user": self.cfg["user_key"], **msg}
+        if self.cfg.get("device"): fields["device"] = self.cfg["device"]
+        if self.page_url: fields.update(url=self.page_url, url_title="Open Anchor Watch")
+        if msg["priority"] == 2:
+            fields.update(retry=self.RETRY_S, expire=self.EXPIRE_S, sound=self.cfg.get("emergency_sound", "persistent"))
+        elif self.cfg.get("sound"): fields["sound"] = self.cfg["sound"]
+        r = self._post("messages.json", fields)
+        if key and r.get("receipt"): self.receipts[key] = r["receipt"]
+        self.last_sent = time.time()
+
+    def process(self, item):
+        """Runs one queued item with retries (called by the worker thread; tests call it directly)."""
+        op, key, msg = item
+        if not self.configured: return
+        for attempt in range(len(self.BACKOFF_S) + 1):
+            try: self._do(op, key, msg); self.last_error = None; return
+            except urllib.error.HTTPError as e:
+                try: detail = "; ".join(json.loads(e.read()).get("errors", [])) or e.reason
+                except Exception: detail = e.reason
+                self.last_error = f"Pushover refused: HTTP {e.code} {detail}"
+                if e.code < 500: break                         # bad key or request: retrying will not help
+            except Exception as e: self.last_error = f"{type(e).__name__}: {e}"
+            if attempt < len(self.BACKOFF_S): time.sleep(self.BACKOFF_S[attempt])
+        if op == "send": self.on_event(f"Push alert not delivered: {self.last_error}", "warn")
+
+    def _worker(self):
+        while True: self.process(self.q.get())
+
+
+# ---------------------------------------------------------------- still-alive check (dead man's switch)
+
+
+class StillAlive:
+    """Pings an outside monitor (healthchecks.io, or any ping URL) so silence can be noticed from outside the boat.
+
+    If the PC, this program or the boat's internet stops, the pings stop; after the still-alive interval the monitor
+    alerts the phone (healthchecks.io's own Pushover integration). The PC pings every PING_EVERY_S (more often for
+    short intervals), so one lost ping over a flaky link does not raise a false alarm.
+
+    Config, a local file that is never committed: {"ping_url": "https://hc-ping.com/<uuid>", "api_key": "<optional>"}.
+    With a read-write API key for a healthchecks.io ping URL, the check's period follows the setting (period =
+    interval, grace = 1 min) and is paused when the interval is 0; without one, set the period on the website.
+    """
+    PING_EVERY_S = 300
+    GRACE_S = 60
+    HC_PING = re.compile(r"^https://hc-ping\.com/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/?$")
+    HC_API = "https://healthchecks.io/api/v3/checks"
+
+    def __init__(self, cfg_file, interval_minutes, on_event=None, start=True):
+        self.cfg_file, self.interval = Path(cfg_file), interval_minutes        # interval: callable -> minutes (0 = off)
+        self.on_event = on_event or (lambda text, kind: None)
+        self.cfg = None; self.last_ok = self.last_error = None; self.synced = None; self.sync_note = None
+        self.next_ping = 0.0; self.next_sync_try = 0.0; self.failing = False
+        self.wake = threading.Event()
+        self.reload()
+        if start: threading.Thread(target=self._worker, daemon=True).start()
+
+    def reload(self):
+        """(Re)reads the config file; returns an error text, or None when it is usable."""
+        try: d = json.loads(self.cfg_file.read_text(encoding="utf-8"))
+        except FileNotFoundError: self.cfg = None; return f"{self.cfg_file.name} not found"
+        except Exception as e: self.cfg = None; return f"{self.cfg_file.name}: {type(e).__name__}: {e}"
+        url = str(d.get("ping_url", "")).strip(); u = urllib.parse.urlparse(url)
+        if u.scheme != "https" or not u.netloc: self.cfg = None; return f"{self.cfg_file.name}: ping_url must be an https:// URL"
+        self.cfg = {"ping_url": url, "api_key": str(d.get("api_key") or "").strip()}
+        self.synced = None; self.next_sync_try = 0.0
+        return None
+
+    @property
+    def configured(self): return self.cfg is not None
+
+    def poke(self, ping_now=False):
+        """Setting or config changed: re-sync the period (and optionally ping straight away)."""
+        self.synced = None; self.next_sync_try = 0.0
+        if ping_now: self.next_ping = 0.0
+        self.wake.set()
+
+    def ping_every(self, minutes): return max(30.0, min(self.PING_EVERY_S, minutes * 60 / 3))
+
+    def _request(self, url, data=None, headers=None):
+        req = urllib.request.Request(url, data=data, method="POST" if data is not None else "GET",
+                                     headers={"User-Agent": f"OrcaCore2-AnchorWatch/{VERSION}", **(headers or {})})
+        with urllib.request.urlopen(req, timeout=15) as r: return r.status, r.read()
+
+    def _sync(self, minutes):
+        m = self.HC_PING.match(self.cfg["ping_url"])
+        if not (self.cfg["api_key"] and m):
+            self.synced = minutes
+            self.sync_note = (f"set the check's period to {minutes:g} min and grace to 1 min on the monitor's website"
+                              if minutes else "pause the check on the monitor's website")
+            return
+        hdr = {"X-Api-Key": self.cfg["api_key"], "Content-Type": "application/json"}
+        if minutes: self._request(f"{self.HC_API}/{m[1]}", json.dumps({"timeout": int(minutes * 60), "grace": self.GRACE_S}).encode(), hdr)
+        else: self._request(f"{self.HC_API}/{m[1]}/pause", b"", hdr)
+        self.synced = minutes; self.sync_note = None
+        self.on_event(f"Still-alive check on healthchecks.io " + (f"set to {minutes:g} min" if minutes else "paused"), "info")
+
+    def step(self, now=None):
+        """One round of the worker: sync the period if needed, ping when due. Tests call it directly."""
+        now = now or time.time()
+        if not self.configured: return
+        minutes = float(self.interval() or 0)
+        if self.synced != minutes and now >= self.next_sync_try:
+            try: self._sync(minutes)
+            except Exception as e:
+                self.sync_note = f"could not update the check: {type(e).__name__}: {e}"; self.next_sync_try = now + 300
+        if minutes <= 0 or now < self.next_ping: return
+        self.next_ping = now + self.ping_every(minutes)
+        try:
+            self._request(self.cfg["ping_url"])
+            self.last_ok = now; self.last_error = None
+            if self.failing: self.failing = False; self.on_event("Still-alive pings get through again", "ok")
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            if not self.failing: self.failing = True; self.on_event(f"Still-alive ping failed (will retry): {self.last_error}", "warn")
+
+    def _worker(self):
+        while True:
+            try: self.step()
+            except Exception: log.exception("still-alive step failed")
+            self.wake.wait(timeout=5); self.wake.clear()
+
+
 # ---------------------------------------------------------------- the watch
 
 
@@ -166,6 +357,8 @@ class AnchorWatch:
         self.core_down_since = None
         self.started = time.time()
         self.dirty = False
+        self.notifier = None               # Pushover, set by main() (tests use a fake)
+        self.alive = None                  # StillAlive, set by main()
         self.load()
 
     # ---- persistence
@@ -229,14 +422,33 @@ class AnchorWatch:
                     self.pending.setdefault(aid, now)
                     if aid not in self.alarms and now - self.pending[aid] >= hold:
                         self.alarms[aid] = {"since": now}; self.event(f"ALARM: {self.ALARM_TEXT[aid]}" + (f" – {detail}" if detail else ""), now, "alarm")
+                        self._push_alarm(aid, detail, now)
                     if aid in self.alarms: self.alarms[aid]["detail"] = detail
                 else:
                     self.pending.pop(aid, None)
                     if aid in self.alarms:
                         del self.alarms[aid]; self.event(f"Cleared: {self.ALARM_TEXT[aid]}", now, "ok")
-            for aid in [x for x in self.alarms if x not in cond]: del self.alarms[aid]      # condition switched off
+                        self._push_cleared(aid, now)
+            for aid in [x for x in self.alarms if x not in cond]:                          # condition switched off
+                del self.alarms[aid]; self._push_cancel(aid)
             for aid in [x for x in self.pending if x not in cond]: del self.pending[aid]
             if not self.alarms: self.silenced_until = 0
+
+    def _push_ok(self): return self.notifier is not None and self.notifier.configured and self.settings["push_alerts"]
+
+    def _push_alarm(self, aid, detail, now):
+        if not self._push_ok(): return
+        b = self.boat
+        extra = [x for x in (f"Depth {b['depth']:.1f} m" if b.get("depth") is not None else "",
+                             f"wind {b['tws']:.0f} kn" if b.get("tws") is not None else "") if x]
+        msg = (detail or self.ALARM_TEXT[aid]) + "." + (" " + ", ".join(extra) + "." if extra else "")
+        self.notifier.alarm(aid, f"\u2693 {self.ALARM_TEXT[aid]}", msg, now)
+
+    def _push_cleared(self, aid, now):
+        if self._push_ok(): self.notifier.cleared(aid, f"Cleared: {self.ALARM_TEXT[aid]}", "The alarm condition has ended.", now)
+
+    def _push_cancel(self, aid=None):
+        if self.notifier is not None: self.notifier.cancel(aid)
 
     def sounding(self, now=None):
         return bool(self.alarms) and (now or time.time()) >= self.silenced_until
@@ -254,7 +466,7 @@ class AnchorWatch:
                 radius = _num(c, "radius", 5, 2000) if c.get("radius") is not None else s["default_radius"]
                 self.anchor = {"lat": lat, "lon": lon, "radius": radius, "set_at": now, "depth": self.boat["depth"]}
                 self.max_dist = dist_bearing_m(lat, lon, pos["lat"], pos["lon"])[0]
-                self.alarms.clear(); self.pending.clear()
+                self._push_cancel(); self.alarms.clear(); self.pending.clear()
                 self.event(f"Anchor down at {lat:.6f}, {lon:.6f}" + (f", {ahead:.0f} m ahead of the GPS" if ahead else "") + f", radius {radius:.0f} m", now)
             elif act == "move":
                 if not self.anchor: raise ValueError("Anchor is not set")
@@ -265,10 +477,12 @@ class AnchorWatch:
                 self.anchor["radius"] = _num(c, "radius", 5, 2000); self.event(f"Radius set to {self.anchor['radius']:.0f} m", now)
             elif act == "raise":
                 if self.anchor: self.event("Anchor up – watch stopped", now)
-                self.anchor = None; self.alarms.clear(); self.pending.clear(); self.silenced_until = 0
+                self._push_cancel(); self.anchor = None; self.alarms.clear(); self.pending.clear(); self.silenced_until = 0
             elif act == "silence":
                 mins = _num(c, "minutes", 0.5, 60)
-                if self.alarms: self.silenced_until = now + mins * 60; self.event(f"Alarm silenced for {mins:g} min", now)
+                if self.alarms:
+                    self.silenced_until = now + mins * 60; self.event(f"Alarm silenced for {mins:g} min", now)
+                    self._push_cancel()                      # someone is on it: stop the repeating phone alert
             elif act == "settings":
                 for k, v in (c.get("settings") or {}).items():
                     if k not in DEFAULTS: continue
@@ -282,6 +496,17 @@ class AnchorWatch:
                         if not (math.isfinite(v) and lo <= v <= hi): raise ValueError(f"{k} must be between {lo} and {hi}")
                     self.settings[k] = v
                 self.event("Settings changed", now)
+                if self.alive is not None and "alive_minutes" in (c.get("settings") or {}): self.alive.poke()
+            elif act == "push_test":
+                if self.notifier is None: raise ValueError("Push alerts are not available")
+                err = self.notifier.reload()
+                if err: raise ValueError(f"Pushover is not set up: {err}")
+                self.notifier.test(); self.event("Test push sent to Pushover", now)
+            elif act == "alive_check":
+                if self.alive is None: raise ValueError("The still-alive check is not available")
+                err = self.alive.reload()
+                if err: raise ValueError(f"Still-alive check is not set up: {err}")
+                self.alive.poke(ping_now=True); self.event("Still-alive ping requested", now)
             elif act == "clear_track":
                 self.track.clear(); self.track_gen += 1; self.max_dist = 0.0; self.event("New track started (old track and max swing deleted)", now)
             else: raise ValueError(f"Unknown action {act!r}")
@@ -304,6 +529,14 @@ class AnchorWatch:
                    "pending": {k: now - t for k, t in self.pending.items() if k not in self.alarms},
                    "sounding": self.sounding(now), "silenced_until": self.silenced_until if self.alarms else 0,
                    "max_dist": self.max_dist, "events": list(self.events)[-40:], "track_gen": self.track_gen,
+                   "push": {"configured": bool(self.notifier and self.notifier.configured),
+                            "last_error": self.notifier.last_error if self.notifier else None,
+                            "last_sent": self.notifier.last_sent if self.notifier else None},
+                   "alive": {"configured": bool(self.alive and self.alive.configured),
+                             "last_ok": self.alive.last_ok if self.alive else None,
+                             "last_error": self.alive.last_error if self.alive else None,
+                             "note": self.alive.sync_note if self.alive else None,
+                             "every_s": self.alive.ping_every(self.settings["alive_minutes"]) if self.alive else None},
                    "track_points": len(self.track), "track_start": self.track[0][0] if self.track else None, "version": VERSION,
                    "gps_age": now - self.last_pos_t if self.last_pos_t else None}
             if a and pos:
@@ -485,12 +718,19 @@ def main():
     ap.add_argument("--tile-cache", default=str(HERE / "tile_cache"), help="folder for cached map tiles")
     ap.add_argument("--certfile", help="HTTPS certificate (certs/server-cert.pem from setup_local_https.ps1)")
     ap.add_argument("--keyfile", help="HTTPS private key (certs/server-key.pem)")
+    ap.add_argument("--pushover", default=str(HERE / "pushover.json"), help="Pushover keys file (see pushover.example.json)")
+    ap.add_argument("--still-alive", default=str(HERE / "still_alive.json"), help="still-alive ping config (see still_alive.example.json)")
     a = ap.parse_args()
     check_bind(a.bind)
     if bool(a.certfile) != bool(a.keyfile): ap.error("--certfile and --keyfile go together")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 
     store = Store(); watch = AnchorWatch(store, a.state)
+    page_url = f"{'https' if a.certfile else 'http'}://{a.bind}:{a.port}/"
+    watch.notifier = Pushover(a.pushover, page_url, on_event=lambda text, kind: watch.event(text, kind=kind))
+    log.info("Push alerts: %s", "Pushover ready" if watch.notifier.configured else f"off ({Path(a.pushover).name} missing or invalid)")
+    watch.alive = StillAlive(a.still_alive, lambda: watch.settings["alive_minutes"], on_event=lambda text, kind: watch.event(text, kind=kind))
+    log.info("Still-alive check: %s", "ready" if watch.alive.configured else f"off ({Path(a.still_alive).name} missing or invalid)")
     server = Server((a.bind, a.port), make_handler(watch, TileCache(a.tile_cache)))
     scheme = "http"
     if a.certfile:

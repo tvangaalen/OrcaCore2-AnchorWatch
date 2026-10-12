@@ -4,6 +4,26 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.1 — Phone alerts
+
+### 1.1.0
+- **Push alerts through Pushover** (`Pushover` in `anchor_watch.py`), so an alarm reaches the phone ashore with the
+  page closed: anchor drag as an **emergency** message that repeats every minute until acknowledged (and can be a
+  Critical Alert that sounds through silent mode), GPS lost / no Core data / depth / wind as high priority, and an
+  all-clear when the condition ends. The emergency is cancelled through its receipt when the alarm clears, is
+  silenced in the app or the anchor is raised.
+- Sending runs on its own worker thread with retries (5, 15, 45 s), so a slow or absent internet link never delays
+  the alarm checks; a key Pushover rejects is not retried and is shown on the page and in the log.
+- Keys live in `pushover.json` (git-ignored; `pushover.example.json` shows the format). *Alarm settings* has a
+  *Phone alerts* switch, a status line and **Send test**, which re-reads the key file without a restart.
+- **Still-alive check** (`StillAlive`): the PC pings healthchecks.io (or any ping URL, `still_alive.json`) every
+  5 minutes; if the pings stop for longer than the *Still-alive check* interval (default 60 min, settable, 0 = off),
+  healthchecks.io alerts the phone through its Pushover integration. This covers what the PC cannot report itself:
+  the PC, the program or the boat's internet going down. With a healthchecks.io API key the check's period follows
+  the setting and the check is paused at 0. Failed pings are logged once, recovery too; **Ping now** tests it.
+
+---
+
 ## 1.0.0 — first release
 
 Everything below was built and checked against a live Orca Core 2 (firmware 1.21.0) on 2026-10-12.

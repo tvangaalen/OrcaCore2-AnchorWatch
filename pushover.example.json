@@ -1,0 +1,6 @@
+{
+  "app_token": "replace with the API token of your Anchor Watch application (pushover.net/apps/build)",
+  "user_key": "replace with your user key (top of the pushover.net dashboard)",
+  "emergency_sound": "persistent",
+  "device": ""
+}
