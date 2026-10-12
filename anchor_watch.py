@@ -27,7 +27,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, str
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8

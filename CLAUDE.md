@@ -24,6 +24,7 @@ Overview: `README.md`. Release history: `CHANGELOG.md`.
   anchor drag as the only emergency (priority 2) alert so the phone does not learn to ignore it.
 - The still-alive ping must keep running independently of the alarm logic (its own thread in `StillAlive`) and must
   ping more often than the interval; never make it depend on the page being open.
+- Times are always shown 24-hour (`clock()` / `dayTime()` in the page); never use locale time defaults (AM/PM).
 - Map tiles are fetched on demand only (OpenStreetMap tile policy): no bulk or prefetch downloads.
 - Never commit `pushover.json` (Pushover keys), `still_alive.json` (ping URL, API key), `certs/`, `anchor_state.json`, `tile_cache/`, `captures/` or `recordings/` (all in `.gitignore`).
   They hold keys, the boat's positions and network captures. Keep real MMSIs and anchorage positions out of tests.

@@ -277,7 +277,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
 // ---------- formatting
 const f0=v=>v==null?'–':Math.round(v), f1=v=>v==null?'–':v.toFixed(1);
 const ago=s=>s==null?'–':s<60?Math.round(s)+' s':s<3600?Math.round(s/60)+' min':(s/3600).toFixed(1)+' h';
-const clock=t=>new Date(t*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+// times are always 24-hour (HH:MM:SS), whatever the device language would pick
+const p2=n=>String(n).padStart(2,'0');
+const clock=t=>{const d=new Date(t*1000);return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`};
+const dayTime=t=>{const d=new Date(t*1000);return `${d.toLocaleDateString([], {weekday:'short'})} ${p2(d.getHours())}:${p2(d.getMinutes())}`};
 const card=d=>['N','NE','E','SE','S','SW','W','NW'][Math.round(d/45)%8];
 const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
@@ -323,7 +326,7 @@ function render(){
   } else {alarmSound(false);banner('','Anchor not set',p?'Drop the anchor below to start the watch.':'Waiting for a GPS position…')}
 
   $('dropCard').style.display=a?'none':'block';$('watchCard').style.display=a?'block':'none';
-  if(a){$('rVal').textContent=f0(a.radius)+' m';$('setAt').textContent='since '+new Date(a.set_at*1000).toLocaleString([], {weekday:'short',hour:'2-digit',minute:'2-digit'})}
+  if(a){$('rVal').textContent=f0(a.radius)+' m';$('setAt').textContent='since '+dayTime(a.set_at)}
   if(!$('dropRadius').value)$('dropRadius').value=f0(S.settings.default_radius);
   if(!settingsLoaded){loadSettings();settingsLoaded=true}
   scope();
@@ -343,7 +346,7 @@ function render(){
   ].join('');
   $('log').innerHTML=S.events.slice().reverse().map(e=>`<div><span class="t">${clock(e.t)}</span><span class="${e.kind}">${esc(e.text)}</span></div>`).join('')||'<div class="note">Nothing yet.</div>';
   $('maphint').textContent=p?`${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}`:'';
-  $('trackInfo').textContent=S.track_points?`Track since ${new Date(S.track_start*1000).toLocaleString([], {weekday:'short',hour:'2-digit',minute:'2-digit'})} · ${S.track_points.toLocaleString()} points`:'Track: empty, recording starts with the next position';
+  $('trackInfo').textContent=S.track_points?`Track since ${dayTime(S.track_start)} · ${S.track_points.toLocaleString()} points`:'Track: empty, recording starts with the next position';
   const oc=S.own_candidate, sg=$('mmsiSuggest');
   if(oc&&!S.settings.own_mmsi){const html=`AIS ${esc(oc.name||'')} ${esc(oc.mmsi)} is ${f0(oc.dist)} m from your GPS, probably your own boat. <button class="small" data-mmsi="${esc(oc.mmsi)}">Use as My MMSI</button>`;if(sg.innerHTML!==html)sg.innerHTML=html;sg.style.display='flex'}
   else sg.style.display='none';
