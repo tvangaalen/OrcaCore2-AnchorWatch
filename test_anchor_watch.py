@@ -23,6 +23,7 @@ class Sim:
         for k, v in kv.items(): self.store.values["sensors"][k.replace("__", ".")] = (v, self.t)
 
     def boat(self, lat, lon, src="4", heading_deg=0.0, frozen=True):
+        lat += (int(self.t) % 3) * 1e-7                     # a real receiver jitters in the last digit (about 1 cm here)
         self.put(**{f"navigation__position__{src}__latitude": lat, f"navigation__position__{src}__longitude": lon,
                     f"navigation__gnss__{src}__method": 1,
                     "navigation__heading__254__heading": heading_deg / 57.29577951308232, "navigation__heading__254__reference": 0})
@@ -79,15 +80,50 @@ class AnchorWatchTest(unittest.TestCase):
 
     def test_gps_lost(self):
         self.s.t += 11
-        self.s.run(31)                                      # raw receivers silent, only the frozen 254 keeps updating
-        self.assertIsNone(self.w.boat["pos"])
+        self.s.run(61)                                      # raw receivers silent, only the frozen 254 keeps updating
+        self.assertIsNone(self.w.boat["pos"]); self.assertIn("254", self.w.frozen)
+        self.assertTrue(any("treated as frozen" in e["text"] for e in self.w.events))
+        self.s.run(31)
         self.assertIn("gps", self.w.alarms)
 
-    def test_core_position_used_when_moving(self):
+    def test_frozen_core_is_used_only_until_it_is_seen_to_be_frozen(self):
         self.s.t += 11
-        self.s.put(navigation__motion__254__stationary=0, navigation__position__254__latitude=LAT, navigation__position__254__longitude=LON)
-        self.w.tick(self.s.t)
+        self.s.run(20)                                      # unchanged for 33 s since first seen: not yet judged frozen
         self.assertEqual(self.w.boat["pos"]["source"], "254")
+        self.s.run(30)
+        self.assertIsNone(self.w.boat["pos"])
+
+    def core_gps(self, lat, lon):
+        lat += (int(self.s.t) % 3) * 1e-7
+        self.s.put(navigation__position__254__latitude=lat, navigation__position__254__longitude=lon,
+                   navigation__gnss__254__method=2, navigation__gnss__254__satellites=22, navigation__motion__254__stationary=1)
+
+    def test_core_gps_alone_works_while_stationary(self):
+        # 2026-10-16: rest of the network off, the Core's own GPS keeps moving although it flags the boat as stationary
+        self.s.t += 11
+        for _ in range(120): self.core_gps(LAT, LON); self.w.tick(self.s.t); self.s.t += 1
+        self.assertEqual(self.w.boat["pos"]["source"], "254"); self.assertEqual(self.w.frozen, set())
+        lat, lon = offset(LAT, LON, 0, 50)
+        for _ in range(11): self.core_gps(lat, lon); self.w.tick(self.s.t); self.s.t += 1
+        self.assertIn("drag", self.w.alarms)
+
+    def test_core_gps_can_be_chosen_first(self):
+        self.w.command({"action": "settings", "settings": {"gps_sources": "254,4,127,3"}})
+        for _ in range(5):
+            self.core_gps(*offset(LAT, LON, 90, 3)); self.s.boat(LAT, LON, frozen=False); self.w.tick(self.s.t); self.s.t += 1
+        self.assertEqual(self.w.boat["pos"]["source"], "254")
+        names = {g["source"]: g for g in self.w.state()["gps_list"]}
+        self.assertTrue(names["254"]["in_use"]); self.assertEqual(names["254"]["name"], "254 (Orca Core 2)")
+        self.assertEqual(self.w.state()["gps_default"], "4,127,3,254")
+
+    def test_frozen_raw_receiver_fails_over_and_recovers(self):
+        for _ in range(62):                                 # source 4 stuck on one value, 127 alive
+            self.s.put(navigation__position__4__latitude=LAT, navigation__position__4__longitude=LON, navigation__gnss__4__method=1)
+            self.s.boat(*offset(LAT, LON, 90, 2), src="127", frozen=False); self.w.tick(self.s.t); self.s.t += 1
+        self.assertEqual(self.w.boat["pos"]["source"], "127"); self.assertIn("4", self.w.frozen)
+        self.s.run(2, lat=LAT, lon=LON)                     # 4 moves again
+        self.assertEqual(self.w.boat["pos"]["source"], "4"); self.assertNotIn("4", self.w.frozen)
+        self.assertTrue(any("is updating again" in e["text"] for e in self.w.events))
 
     def test_core_lost(self):
         self.s.store.status["sensors"]["connected"] = False

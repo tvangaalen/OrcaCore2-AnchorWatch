@@ -4,6 +4,23 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.2 — Orca Core GPS
+
+### 1.2.0
+- **The Orca Core 2's own GPS (source 254) can be chosen** under *Alarm settings → GPS source*, as first choice or
+  through *Automatic* (`4 → 127 → 3 → 254`). With the rest of the NMEA 2000 network switched off to save the battery
+  it is the only GPS left; measured on 2026-10-16 with the Core alone, it updated its position about every 1.7 s
+  (21-32 satellites, HDOP ~0.5) although the Core flagged the boat as stationary, and the watch ran on it normally.
+- **Frozen-position check replaces the old rule** that skipped 254 whenever the Core said "stationary": any GPS
+  whose position has not changed at all for 60 s is treated as frozen, skipped (failover to the next source) and
+  logged, and logged again when it recovers. With no usable GPS left the GPS alarm goes off. This still catches the
+  frozen 254 position seen on 2026-10-12 and also a stuck external receiver.
+- The page lists every GPS with its name (from the NMEA 2000 device list, read every minute again), satellites,
+  HDOP, frozen state and which one is in use. The old default order `4,127,3` is upgraded to `4,127,3,254`.
+- The *Depth* and *True wind* tiles say when their alarm is set but no data arrives (instruments switched off).
+
+---
+
 ## 1.1 — Phone alerts
 
 ### 1.1.2

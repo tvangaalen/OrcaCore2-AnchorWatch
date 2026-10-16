@@ -107,6 +107,7 @@ button.on{outline:2px solid var(--accent)}
 .row+.row{margin-top:10px}
 .grow{flex:1}
 label.f{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);flex:1;min-width:120px}
+select{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;width:100%;min-height:42px}
 input[type=number],input[type=text]{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;width:100%;min-height:42px}
 .seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .seg button{border:0;border-radius:0;flex:1;background:transparent}
@@ -216,6 +217,10 @@ details summary{cursor:pointer;color:var(--muted);font-size:14px;padding:6px 0}
           <label class="f">Default radius (m)<input type="number" data-s="default_radius" min="5" max="2000"></label>
         </div>
         <div class="row">
+          <label class="f">GPS source<select id="gpsSel"></select></label>
+        </div>
+        <div class="note" id="gpsInfo" style="margin-top:4px"></div>
+        <div class="row">
           <label class="f">My MMSI (never shown as an AIS target)<input type="text" data-s="own_mmsi" inputmode="numeric" maxlength="9" placeholder="9 digits"></label>
         </div>
         <div class="suggest" id="mmsiSuggest" style="display:none"></div>
@@ -233,11 +238,11 @@ details summary{cursor:pointer;color:var(--muted);font-size:14px;padding:6px 0}
         </div>
         <details><summary>More</summary>
           <div class="row">
-            <label class="f">GPS sources, in order<input type="text" data-s="gps_sources"></label>
+            <label class="f">GPS sources, in order (advanced)<input type="text" data-s="gps_sources"></label>
             <label class="f">Track kept (h)<input type="number" data-s="track_hours" min="1" max="72"></label>
           </div>
           <div class="row"><label class="check"><input type="checkbox" data-s="pc_sound"> Beep on the watch PC</label></div>
-          <p class="note">The Core's own position (source 254) is frozen while the boat is stationary, so the watch uses the raw receivers: 4 = B&amp;G iGPS, 127 = ZG100 antenna, 3 = Onwa AIS GPS.</p>
+          <p class="note">Sources are tried in this order, the next one takes over when a GPS stops. 254 is the Orca Core's own GPS. A GPS whose position has not changed at all for 60 s counts as frozen and is skipped.</p>
         </details>
         <div class="row"><button class="primary" id="saveSettings">Save settings</button><span class="note" id="settingsMsg" style="margin:0"></span></div>
       </div>
@@ -332,12 +337,14 @@ function render(){
   scope();
 
   // tiles
-  const gpsSub=p?`src ${p.source}${p.frozen_core?' (Core, frozen!)':''} · ${p.sats!=null?p.sats+' sats':''}${p.hdop!=null?' · HDOP '+p.hdop:''}`:`no fix · ${ago(S.gps_age)} ago`;
+  const gpsSub=p?`src ${p.source}${p.source==='254'?' (Orca Core)':''} · ${p.sats!=null?p.sats+' sats':''}${p.hdop!=null?' · HDOP '+p.hdop:''}`:`no fix · ${ago(S.gps_age)} ago`;
   $('tiles').innerHTML=[
     a?tile('From anchor',S.distance!=null?f0(S.distance):'–','m',S.bearing!=null?`bearing ${f0(S.bearing)}° ${card(S.bearing)}`:''):'',
     a?tile('Max swing',f0(S.max_dist),'m',`limit ${f0(a.radius)} m`):'',
-    tile('Depth',f1(b.depth),'m',a&&a.depth!=null?`at drop ${f1(a.depth)} m`:'below transducer'),
-    tile('True wind',f0(b.tws),'kn',b.twd!=null?`from ${f0(b.twd)}° ${card(b.twd)}`:''),
+    tile('Depth',f1(b.depth),'m',b.depth==null&&S.settings.min_depth>0?'<span style="color:var(--warn)">no depth data: depth alarm inactive</span>'
+      :a&&a.depth!=null?`at drop ${f1(a.depth)} m`:'below transducer'),
+    tile('True wind',f0(b.tws),'kn',b.tws==null&&S.settings.max_wind_kn>0?'<span style="color:var(--warn)">no wind data: wind alarm inactive</span>'
+      :b.twd!=null?`from ${f0(b.twd)}° ${card(b.twd)}`:''),
     tile('Heading',b.heading!=null?f0(b.heading):'–','°T',''),
     tile('SOG',f1(b.sog),'kn',''),
     tile('GPS',p?(p.hdop!=null&&p.hdop>2?'Poor':'OK'):'Lost','',gpsSub),
@@ -360,6 +367,7 @@ function render(){
     :(al.last_error?`<span style="color:var(--bad)">Last ping failed: ${esc(al.last_error)}</span> `:'')
      +`If the PC stops answering for ${mins} min, the monitor alerts your phone. Pings every ${Math.round((al.every_s||300)/60)} min${al.last_ok?', last '+clock(al.last_ok):''}.`
      +(al.note?` <b>To do:</b> ${esc(al.note)}.`:'');
+  renderGps();
   $('footer').textContent=`Anchor Watch ${S.version||''} · not for navigation`;
   drawMap();
 }
@@ -467,6 +475,24 @@ $('rPlus').onclick=()=>cmd({action:'radius',radius:S.anchor.radius+5},$('watchEr
 $('silenceBtn').onclick=()=>cmd({action:'silence',minutes:5},$('watchErr'));
 $('raiseBtn').onclick=()=>{if(confirm('Anchor up? This stops the watch.'))cmd({action:'raise'},$('watchErr'))};
 $('aliveCheck').onclick=()=>cmd({action:'alive_check'},$('settingsMsg')).then(ok=>{if(ok)$('settingsMsg').textContent='Ping sent'});
+// GPS source choice: the chosen source first, then the rest of the default order as fallback
+function gpsOrder(first){const d=S.gps_default.split(',');return first==='auto'?S.gps_default:[first,...d.filter(x=>x!==first)].join(',')}
+function renderGps(){
+  const sel=$('gpsSel'), cur=S.settings.gps_sources, first=cur===S.gps_default?'auto':cur.split(',')[0];
+  const known=new Map(S.gps_list.map(g=>[g.source,g]));
+  for(const s of S.gps_default.split(','))if(!known.has(s))known.set(s,{source:s,name:s==='254'?'254 (Orca Core 2)':s,missing:true});
+  const opt=(v,txt)=>`<option value="${esc(v)}"${v===first?' selected':''}>${esc(txt)}</option>`;
+  const html=opt('auto',`Automatic (${S.gps_default.replaceAll(',',' → ')})`)+[...known.values()].map(g=>opt(g.source,
+    `${g.name}${g.missing?' – not seen':g.frozen?' – frozen':g.sats!=null?` – ${g.sats} sats`:''}${g.source==='254'?' · own GPS of the Core':''}`)).join('')
+    +(first!=='auto'&&!known.has(first)?opt(first,first+' – not seen'):'');
+  if(document.activeElement!==sel&&sel.innerHTML!==html)sel.innerHTML=html;
+  const use=S.gps_list.find(g=>g.in_use), bad=S.gps_list.filter(g=>g.frozen).map(g=>g.name);
+  $('gpsInfo').innerHTML=(use?`In use: <b>${esc(use.name)}</b>${use.sats!=null?' · '+use.sats+' sats':''}${use.hdop!=null?' · HDOP '+use.hdop:''}`:'<span style="color:var(--bad)">No usable GPS</span>')
+    +(bad.length?` · <span style="color:var(--warn)">frozen, skipped: ${esc(bad.join(', '))}</span>`:'')
+    +` · order ${esc(cur.replaceAll(',',' → '))}`;
+}
+$('gpsSel').onchange=e=>{const order=gpsOrder(e.target.value);
+  cmd({action:'settings',settings:{gps_sources:order}},$('settingsMsg')).then(ok=>{if(ok){document.querySelector('[data-s=gps_sources]').value=order;$('settingsMsg').textContent='GPS source saved'}})};
 $('pushTest').onclick=()=>cmd({action:'push_test'},$('settingsMsg')).then(ok=>{if(ok)$('settingsMsg').textContent='Test push sent'});
 $('newTrack').onclick=()=>{if(confirm('Start a new track? The recorded track and the max swing are deleted.'))cmd({action:'clear_track'})};
 $('mmsiSuggest').onclick=e=>{const m=e.target.dataset.mmsi;if(!m)return;

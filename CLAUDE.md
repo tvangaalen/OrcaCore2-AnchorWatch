@@ -9,8 +9,10 @@ Overview: `README.md`. Release history: `CHANGELOG.md`.
 
 - **Read-only on the Core.** Never call `PUT /v1/sources`, `POST :9001/imu/calibration`, the `/v1/sync` WebSocket
   or the firmware page on port 8090, and never send anything on the sensor WebSockets. Only GETs and listening.
-- **Never use the Core's fused position (source 254) to detect drift while it flags the boat as stationary**: it is
-  frozen then. Keep the raw-receiver priority and the `navigation.motion.254.stationary` check in `read_boat`.
+- **Never trust a GPS position just because it is fresh**: the Core's position (source 254) can freeze while it flags
+  the boat as stationary, and a frozen position hides a drag. Keep the frozen-position check in `AnchorWatch.tick`
+  (`FROZEN_S`: unchanged for 60 s = not used) for every source, including 254, which the user can choose (Core-only
+  power-saving setup). Tests must give simulated receivers jitter, or they count as frozen.
 - **Parse Core messages with `orca_reader.parse_message`**, never plain `json.loads`: the Core sends unescaped text.
 - The alarm logic runs on the server (`AnchorWatch.tick`); the page only displays and sends commands. Do not move
   alarm decisions into the browser.

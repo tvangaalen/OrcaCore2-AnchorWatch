@@ -6,10 +6,13 @@ optional depth/wind limits are crossed. The watch runs here, not in the browser:
 (on Windows) sounded on this PC even when no page is open. The page at http://<this PC>:8766/ shows the
 swing circle, track and nearby AIS boats and works from a phone on the boat Wi-Fi.
 
-Position source: the Core's own fused position (source 254) is NOT used for the watch. While the Core flags
-the boat as stationary (navigation.motion.254.stationary = 1) it freezes that position (verified 2026-10-12:
-254 stayed at one value for minutes while the raw receivers moved), which would hide a slow drag. The raw
-GNSS receivers are used instead, in the priority order of the `gps_sources` setting, with failover.
+Position source: the GNSS sources are used in the order of the `gps_sources` setting, with failover. The Core's
+own GPS (source 254) can be chosen too: with the rest of the NMEA 2000 network switched off it is the only one
+left. It is not always trustworthy while the boat lies still: on 2026-10-12, with the other receivers on, 254 stayed
+at one exact value for minutes, while on 2026-10-16 (Core alone) it kept moving although the Core flagged the boat
+as stationary both times. A frozen position would hide a slow drag, so every source is checked directly: a position
+that has not changed at all for FROZEN_S is treated as frozen and skipped (real receivers always jitter in the last
+digit), and with no usable source left the GPS alarm goes off.
 
 State (anchor, settings, track, events) is kept in anchor_state.json so a restart does not lose the watch.
 
@@ -22,16 +25,18 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, stream_loop
+from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, devices_loop, stream_loop
 
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.1.2"
+VERSION = "1.2.0"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
 FRESH_S = 10            # a position older than this is not used
+FROZEN_S = 60           # a position that has not changed at all for this long is frozen (see module doc)
+DEFAULT_GPS = "4,127,3,254"
 TRACK_EVERY_S = 5
 AIS_RANGE_M = 600
 
@@ -43,7 +48,7 @@ DEFAULTS = {
     "min_depth": 0.0,         # m below transducer, 0 = off
     "max_wind_kn": 0.0,       # true wind speed, 0 = off
     "bow_offset": 0.0,        # m from GPS antenna forward to the bow roller
-    "gps_sources": "4,127,3", # raw GNSS sources in order of preference (254 is a last resort)
+    "gps_sources": DEFAULT_GPS,  # GNSS sources in order of preference; 254 = the Orca Core's own GPS
     "own_mmsi": "",           # "My MMSI": this boat's AIS, never shown as a target; empty = hide any target within 10 m of our GPS
     "pc_sound": True,         # beep on this PC while an alarm sounds
     "push_alerts": True,      # send alarms to the phone through Pushover (needs pushover.json)
@@ -77,27 +82,31 @@ def num(x): return isinstance(x, (int, float)) and not isinstance(x, bool) and m
 # ---------------------------------------------------------------- reading the Core values
 
 
-def read_boat(sensors, now, sources_pref):
-    """Pick the position and the other values the watch needs from the Store's sensor map (key -> (value, t))."""
+def position_sources(sensors, now):
+    """Every source with a fixed, fresh-or-not position: src -> {lat, lon, age, sats, hdop}."""
     def val(k):
         v = sensors.get(k); return (v[0], now - v[1]) if v and num(v[0]) else (None, None)
-
-    cands = {}
+    out = {}
     for k in sensors:
         if k.startswith("navigation.position.") and k.endswith(".latitude"):
             src = k.split(".")[2]
             lat, a1 = val(k); lon, a2 = val(f"navigation.position.{src}.longitude")
             fix, _ = val(f"navigation.gnss.{src}.method")
             if lat is None or lon is None or fix == 0 or (lat == 0 and lon == 0): continue
-            if src == CORE_SOURCE and val("navigation.motion.254.stationary")[0] == 1: continue   # frozen, see module doc
-            cands[src] = {"lat": lat, "lon": lon, "age": max(a1, a2), "source": src}
-    order = [s for s in sources_pref if s != CORE_SOURCE]
-    order += sorted((s for s in cands if s not in order and s != CORE_SOURCE), key=lambda s: cands[s]["age"]) + [CORE_SOURCE]
+            out[src] = {"lat": lat, "lon": lon, "age": max(a1, a2), "source": src,
+                        "sats": val(f"navigation.gnss.{src}.satellites")[0], "hdop": val(f"navigation.gnss.{src}.HDOP")[0]}
+    return out
+
+
+def read_boat(sensors, now, sources_pref, frozen=frozenset()):
+    """Pick the position and the other values the watch needs from the Store's sensor map (key -> (value, t)).
+    Sources in `frozen` (position unchanged for FROZEN_S) are skipped."""
+    def val(k):
+        v = sensors.get(k); return (v[0], now - v[1]) if v and num(v[0]) else (None, None)
+
+    cands = {s: c for s, c in position_sources(sensors, now).items() if s not in frozen}
+    order = list(sources_pref) + sorted((s for s in cands if s not in sources_pref), key=lambda s: cands[s]["age"])
     pos = next((dict(cands[s]) for s in order if s in cands and cands[s]["age"] <= FRESH_S), None)
-    if pos:
-        src = pos["source"]
-        pos["hdop"], _ = val(f"navigation.gnss.{src}.HDOP"); pos["sats"], _ = val(f"navigation.gnss.{src}.satellites")
-        pos["frozen_core"] = src == CORE_SOURCE
 
     def first(keys):
         for k in keys:
@@ -358,6 +367,9 @@ class AnchorWatch:
         self.boat = {"pos": None, "heading": None, "depth": None, "tws": None, "twd": None, "sog": None}
         self.last_pos_t = None
         self.last_source = None
+        self.pos_seen = {}                 # source -> (lat, lon, time the value last changed)
+        self.frozen = set()                # sources whose position stopped changing (FROZEN_S)
+        self.gps_list = []                 # every position source, for the page
         self.core_down_since = None
         self.started = time.time()
         self.dirty = False
@@ -371,6 +383,7 @@ class AnchorWatch:
         except FileNotFoundError: return
         except Exception as e: log.warning("could not read %s: %s", self.state_file, e); return
         self.settings.update({k: v for k, v in d.get("settings", {}).items() if k in DEFAULTS})
+        if self.settings["gps_sources"] == "4,127,3": self.settings["gps_sources"] = DEFAULT_GPS   # old default (< 1.2.0)
         self.anchor = d.get("anchor"); self.max_dist = d.get("max_dist", 0.0)
         self.track = deque(d.get("track", [])); self.events.extend(d.get("events", []))
         if self.anchor: log.info("anchor watch restored: %.6f, %.6f radius %.0f m", self.anchor["lat"], self.anchor["lon"], self.anchor["radius"])
@@ -394,13 +407,26 @@ class AnchorWatch:
         with self.lock:
             s = self.settings
             prefs = [x.strip() for x in str(s["gps_sources"]).split(",") if x.strip()]
-            boat = read_boat(sensors, now, prefs); self.boat = boat; pos = boat["pos"]
+            srcs = position_sources(sensors, now)
+            for src, c in srcs.items():
+                seen = self.pos_seen.get(src)
+                if not seen or (seen[0], seen[1]) != (c["lat"], c["lon"]): self.pos_seen[src] = (c["lat"], c["lon"], now)
+            frozen = {src for src, (_, _, t) in self.pos_seen.items()
+                      if src in srcs and srcs[src]["age"] <= FRESH_S and now - t >= FROZEN_S}
+            for src in frozen - self.frozen:
+                self.event(f"GPS {self.source_name(src)} has not moved at all for {FROZEN_S} s: treated as frozen, not used", now, "warn")
+            for src in self.frozen - frozen:
+                if src in srcs: self.event(f"GPS {self.source_name(src)} is updating again", now, "ok")
+            self.frozen = frozen
+            boat = read_boat(sensors, now, prefs, frozen); self.boat = boat; pos = boat["pos"]
+            self.gps_list = [{"source": src, "name": self.source_name(src), "sats": c["sats"], "hdop": c["hdop"],
+                              "age": round(c["age"], 1), "frozen": src in frozen, "in_use": bool(pos and pos["source"] == src)}
+                             for src, c in sorted(srcs.items(), key=lambda kv: (kv[0] != CORE_SOURCE, int(kv[0])))]
             self.core_down_since = None if connected else (self.core_down_since or now)
             if pos:
                 self.last_pos_t = now
                 if pos["source"] != self.last_source:
-                    if self.last_source is not None or pos["frozen_core"]:
-                        self.event(f"Position source now {pos['source']}" + (" (Core fused position, frozen while stationary)" if pos["frozen_core"] else ""), now, "warn")
+                    if self.last_source is not None: self.event(f"Position source now {self.source_name(pos['source'])}", now, "warn")
                     self.last_source = pos["source"]
                 if not self.track or now - self.track[-1][0] >= TRACK_EVERY_S:
                     self.track.append([round(now, 1), round(pos["lat"], 7), round(pos["lon"], 7)]); self.dirty = True
@@ -453,6 +479,11 @@ class AnchorWatch:
 
     def _push_cancel(self, aid=None):
         if self.notifier is not None: self.notifier.cancel(aid)
+
+    def source_name(self, src):
+        if src == CORE_SOURCE: return "254 (Orca Core 2)"
+        label = self.store.source_label(src)
+        return f"{src} ({label})" if label and not label.startswith("Source ") else str(src)
 
     def sounding(self, now=None):
         return bool(self.alarms) and (now or time.time()) >= self.silenced_until
@@ -528,7 +559,7 @@ class AnchorWatch:
                           "last_message_age": now - sa["last_message"] if sa["last_message"] else None}
         with self.lock:
             b = self.boat; pos = b["pos"]; a = self.anchor
-            out = {"time": now, "core": core, "ais_stream": ais_stream, "boat": b, "anchor": a, "settings": self.settings,
+            out = {"time": now, "core": core, "ais_stream": ais_stream, "boat": b, "gps_list": self.gps_list, "gps_default": DEFAULT_GPS, "anchor": a, "settings": self.settings,
                    "alarms": [{"id": k, "text": self.ALARM_TEXT[k], "detail": v.get("detail", ""), "since": v["since"]} for k, v in self.alarms.items()],
                    "pending": {k: now - t for k, t in self.pending.items() if k not in self.alarms},
                    "sounding": self.sounding(now), "silenced_until": self.silenced_until if self.alarms else 0,
@@ -747,7 +778,8 @@ def main():
     log.info("Anchor Watch %s: %s://%s:%d/  (Core %s)", VERSION, scheme, a.bind, a.port, a.host)
 
     async def run():
-        tasks = [stream_loop(store, "sensors", f"ws://{a.host}:8089" + SENSORS_PATH.format(ms=1000), None), watch_loop(watch)]
+        tasks = [stream_loop(store, "sensors", f"ws://{a.host}:8089" + SENSORS_PATH.format(ms=1000), None), watch_loop(watch),
+                 devices_loop(store, a.host)]
         if not a.no_ais: tasks.append(stream_loop(store, "ais", f"ws://{a.host}:8089" + AIS_PATH, None))
         await asyncio.gather(*tasks)
     try: asyncio.run(run())

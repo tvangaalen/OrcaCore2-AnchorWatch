@@ -112,10 +112,15 @@ when the API key is in place), otherwise it alerts after the interval.
   10 m of the GPS is hidden and the page offers it as *Use as My MMSI*.
 - **AIS:** targets within 600 m are drawn on the map; boats within 120 m (or twice the radius) are kept in view.
   The *AIS nearby* tile says so when the AIS feed is down.
-- **Position source:** the Core's own position (source 254) is **frozen while the Core flags the boat as
-  stationary** (`navigation.motion.254.stationary = 1`); it did not move for minutes while the receivers did.
-  The watch therefore uses the raw receivers in order `4,127,3` (setting *GPS sources*) with failover, and uses 254
-  only while the Core says the boat is moving.
+- **GPS source** (Alarm settings): *Automatic* tries `4 → 127 → 3 → 254` (B&G iGPS, ZG100, Onwa AIS GPS, Orca Core),
+  or pick one GPS to go first, e.g. **254, the Orca Core 2's own GPS**: with the rest of the NMEA 2000 network switched
+  off to save the battery it is the only one left, and the watch keeps working on it. The next source in line takes
+  over when one stops. The list shows which GPS is in use, its satellites and HDOP.
+- **Frozen-position check:** the Core's position is not always live while it flags the boat as stationary (on
+  2026-10-12, with the other receivers on, it stayed at one exact value for minutes; on 2026-10-16, Core alone, it
+  kept moving). A frozen position would hide a slow drag, so any GPS whose position has not changed at all for 60 s
+  is skipped and logged; real receivers always jitter in the last digit. With no usable GPS left, the GPS alarm goes off.
+- With the instruments off there is no depth or wind; the tiles then say that the depth or wind alarm is inactive.
 - Anchor, settings, track and log are kept in `anchor_state.json`, so a restart resumes the watch.
 
 ### Map
