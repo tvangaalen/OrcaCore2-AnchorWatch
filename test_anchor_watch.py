@@ -3,10 +3,11 @@
 import tempfile, unittest
 from pathlib import Path
 
-import io, json, os, time, urllib.error
+import asyncio, io, json, os, time, urllib.error
+from datetime import datetime, timezone
 from unittest import mock
 
-from anchor_watch import AnchorWatch, Pushover, StillAlive, TileCache, dist_bearing_m, offset
+from anchor_watch import AnchorWatch, InternetAIS, Pushover, StillAlive, TileCache, read_ais, dist_bearing_m, offset
 from orca_reader import Store
 
 LAT, LON = 39.0, 1.5        # an arbitrary point at sea; the tests only use positions relative to it
@@ -448,6 +449,102 @@ class StillAliveTest(unittest.TestCase):
             self.assertIsNone(a.synced); self.assertEqual(w.settings["alive_minutes"], 15)
             self.assertEqual(w.state()["alive"]["every_s"], 300)
         finally: s.dir.cleanup()
+
+
+class InternetAISTest(unittest.TestCase):
+    KEY = "0123456789abcdef0123456789abcdef01234567"
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory(); self.f = Path(self.dir.name, "aisstream.json")
+        self.f.write_text(json.dumps({"api_key": self.KEY}), encoding="utf-8")
+        self.n = InternetAIS(self.f, lambda: (LAT, LON), lambda: True)
+
+    def tearDown(self): self.dir.cleanup()
+
+    def pos(self, mmsi, lat, lon, typ="PositionReport", when="2026-10-16 15:45:45.948838287 +0000 UTC", **body):
+        return {"MessageType": typ, "MetaData": {"MMSI": int(mmsi), "ShipName": "SEA LADY   ", "latitude": lat, "longitude": lon, "time_utc": when},
+                "Message": {typ: {"Latitude": lat, "Longitude": lon, "Cog": 123.4, "Sog": 4.2, "TrueHeading": 511, **body}}}
+
+    def test_position_and_static_reports(self):
+        now = datetime(2026, 10, 16, 15, 46, 0, tzinfo=timezone.utc).timestamp()
+        self.n.handle(self.pos("987654321", *offset(LAT, LON, 0, 200)), now)
+        self.n.handle({"MessageType": "ShipStaticData", "MetaData": {"MMSI": 987654321},
+                       "Message": {"ShipStaticData": {"Name": "SEA LADY", "Dimension": {"A": 10, "B": 4, "C": 2, "D": 2}}}}, now)
+        t = self.n.snapshot(now)[0]
+        self.assertEqual((t["name"], t["sog"], t["cog"], t["heading"], t["length"]), ("SEA LADY", 4.2, 123, None, 14))
+        self.assertEqual(now - t["t"], 15)                                                # age from the report's own time (whole seconds)
+        self.n.handle(self.pos("111222333", 91, 181), now); self.assertEqual(len(self.n.snapshot(now)), 1)   # "not available"
+        self.n.handle(self.pos("123", 39.0, 1.5), now); self.assertEqual(len(self.n.snapshot(now)), 1)        # no valid MMSI
+
+    def test_class_b_report_and_expiry(self):
+        self.n.handle(self.pos("222333444", LAT, LON, typ="StandardClassBPositionReport", when="garbage", TrueHeading=90), 1000)
+        t = self.n.snapshot(1000)[0]; self.assertEqual((t["heading"], t["t"]), (90, 1000))
+        self.assertEqual(self.n.snapshot(1000 + 901), [])
+
+    def test_local_receiver_has_priority(self):
+        now = 10_000.0
+        local = {f"ais.x.987654321.position.{k}": (v, now - 20) for k, v in
+                 (("latitude", offset(LAT, LON, 0, 100)[0]), ("longitude", LON), ("name", "LOCAL NAME"))}
+        net = [{"mmsi": "987654321", "lat": offset(LAT, LON, 0, 300)[0], "lon": LON, "t": now - 5, "name": "NET NAME"},
+               {"mmsi": "555666777", "lat": offset(LAT, LON, 90, 150)[0], "lon": offset(LAT, LON, 90, 150)[1], "t": now - 40},
+               {"mmsi": "123456789", "lat": LAT, "lon": LON, "t": now}]                  # My MMSI
+        out = {t["mmsi"]: t for t in read_ais(local, now, LAT, LON, "123456789", None, net)}
+        self.assertEqual(set(out), {"987654321", "555666777"})
+        self.assertEqual((out["987654321"]["src"], out["987654321"]["name"], round(out["987654321"]["dist"])), ("local", "LOCAL NAME", 100))
+        self.assertEqual((out["555666777"]["src"], out["555666777"]["age"]), ("internet", 40))
+        # local position gone stale (older than 15 min): the internet report takes over, keeping the local name if it has none
+        stale = {k: (v, now - 1000) for k, (v, _) in local.items()}
+        net[0].pop("name")
+        r = {t["mmsi"]: t for t in read_ais(stale, now, LAT, LON, "123456789", None, net)}["987654321"]
+        self.assertEqual((r["src"], r["name"], round(r["dist"])), ("internet", "LOCAL NAME", 300))
+
+    def test_key_file(self):
+        self.assertTrue(self.n.configured)
+        self.f.write_text(json.dumps({self.KEY: "replace with your key"}), encoding="utf-8")
+        self.assertIn("in place of the field name", self.n.reload())
+        self.f.write_text(json.dumps({"api_key": "short"}), encoding="utf-8"); self.assertIn("API key", self.n.reload())
+        self.f.unlink(); self.assertIn("not found", self.n.reload())
+
+    def test_box_is_around_the_boat(self):
+        (la1, lo1), (la2, lo2) = self.n.box(LAT, LON)
+        self.assertTrue(la1 < LAT < la2 and lo1 < LON < lo2); self.assertAlmostEqual(la2 - la1, 0.06, places=4)
+
+    def run_loop(self, frames):
+        sent = []; n = self.n
+
+        class FakeWS:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def send(self, text): sent.append(json.loads(text))
+            async def recv(self):
+                if frames:
+                    f = frames.pop(0)
+                    if isinstance(f, Exception): raise f
+                    return json.dumps(f)
+                n.kick = True; return json.dumps({})
+
+        sleeps = []
+        async def stop(seconds): sleeps.append(seconds); raise asyncio.CancelledError
+        with mock.patch("anchor_watch.websockets.connect", lambda *a, **k: FakeWS()), mock.patch("anchor_watch.asyncio.sleep", stop):
+            with self.assertRaises(asyncio.CancelledError): asyncio.run(n.run())
+        return sent, sleeps
+
+    def test_loop_subscribes_and_collects(self):
+        sent, sleeps = self.run_loop([self.pos("987654321", *offset(LAT, LON, 0, 200))])
+        self.assertEqual(sent[0]["APIKey"], self.KEY); self.assertEqual(sent[0]["BoundingBoxes"], [self.n.box(LAT, LON)])
+        self.assertIn("ShipStaticData", sent[0]["FilterMessageTypes"])
+        self.assertEqual(len(self.n.targets), 1); self.assertIsNone(self.n.last_error); self.assertEqual(sleeps, [5])
+
+    def test_abrupt_close_after_subscribing_counts_as_refused_and_logs_once(self):
+        import websockets
+        events = []; self.n.on_event = lambda t, k: events.append(t)
+        for _ in range(2):
+            self.run_loop([websockets.ConnectionClosedError(None, None)])
+        self.assertIn("API key not accepted", self.n.last_error); self.assertEqual(len(events), 1)
+
+    def test_loop_backs_off_on_refused_key(self):
+        sent, sleeps = self.run_loop([{"error": "Api Key Is Not Valid"}])
+        self.assertIn("Api Key Is Not Valid", self.n.last_error); self.assertEqual(sleeps, [300])
 
 
 if __name__ == "__main__":

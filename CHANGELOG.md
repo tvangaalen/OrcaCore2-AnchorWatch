@@ -4,6 +4,23 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.3 — Internet AIS
+
+### 1.3.0
+- **Internet AIS from aisstream.io** (`InternetAIS`): one WebSocket subscribed to a box around the boat (re-opened when
+  the boat has moved 1.5 km), position and static reports folded into targets that expire after 15 min.
+- **The own AIS receiver always has priority** (`read_ais`): an internet report is only used for a ship without a
+  current local position; a ship that drops out locally is taken over from internet and keeps its local name. My
+  MMSI is filtered from both. Internet ships are drawn hollow with an italic name and the report's age; the *AIS
+  nearby* tile counts them, and no longer says "feed down" while internet AIS covers a dead local feed.
+- *Alarm settings* has an *Internet AIS* switch, a status line and **Reconnect** (re-reads `aisstream.json`, which is
+  git-ignored). A key aisstream.io does not accept (it drops the connection straight after the subscription) is
+  reported once and retried every 5 minutes instead of hammering the service.
+- Checked first: the Orca app's own internet AIS does not come from the Core. With the Core alone its AIS stream was
+  empty, and a capture showed the app fetching it from Orca's cloud (`europe-west1-the-orca.cloudfunctions.net`).
+
+---
+
 ## 1.2 — Orca Core GPS
 
 ### 1.2.0

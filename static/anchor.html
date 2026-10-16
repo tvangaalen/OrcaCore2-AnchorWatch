@@ -86,6 +86,8 @@ button.on{outline:2px solid var(--accent)}
 .boat-ic .gps{fill:var(--accent);stroke:none}
 .ais-ic svg{fill:var(--ais);stroke:var(--panel);stroke-width:1;display:block}
 .ais-ic span{position:absolute;left:15px;top:-2px;white-space:nowrap;font-size:11px;color:var(--ais);text-shadow:0 0 2px var(--panel),0 0 2px var(--panel)}
+.ais-ic.net svg{fill:none;stroke:var(--ais);stroke-width:1.6}
+.ais-ic.net span{font-style:italic;opacity:.85}
 /* tiles follow the theme; seamarks are never colour-inverted so buoy colours keep their meaning */
 @media (prefers-color-scheme:dark){:root:not([data-theme]) .tl-osm{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}:root:not([data-theme]) .tl-satellite{filter:brightness(.8)}}
 :root[data-theme="dark"] .tl-osm{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}
@@ -235,6 +237,11 @@ details summary{cursor:pointer;color:var(--muted);font-size:14px;padding:6px 0}
             <button class="small" id="aliveCheck">Ping now</button>
           </div>
           <div class="note" id="aliveStatus" style="margin-top:4px"></div>
+          <div class="row" style="justify-content:space-between;margin-top:10px">
+            <label class="check"><input type="checkbox" data-s="internet_ais"> Internet AIS (aisstream.io)</label>
+            <button class="small" id="netAisCheck">Reconnect</button>
+          </div>
+          <div class="note" id="netAisStatus" style="margin-top:4px"></div>
         </div>
         <details><summary>More</summary>
           <div class="row">
@@ -348,8 +355,9 @@ function render(){
     tile('Heading',b.heading!=null?f0(b.heading):'–','°T',''),
     tile('SOG',f1(b.sog),'kn',''),
     tile('GPS',p?(p.hdop!=null&&p.hdop>2?'Poor':'OK'):'Lost','',gpsSub),
-    aisDown()?tile('AIS nearby','–','',`<span style="color:var(--warn)">AIS feed down · ${S.ais_stream.last_message_age!=null?'last data '+ago(S.ais_stream.last_message_age)+' ago':'no data yet'}</span>`)
-      :tile('AIS nearby',S.ais.length,'',S.ais[0]?`closest ${esc(S.ais[0].name||S.ais[0].mmsi)} ${f0(S.ais[0].dist)} m`:'within 600 m'),
+    aisDown()&&!netOk()?tile('AIS nearby','–','',`<span style="color:var(--warn)">AIS feed down · ${S.ais_stream.last_message_age!=null?'last data '+ago(S.ais_stream.last_message_age)+' ago':'no data yet'}</span>`)
+      :tile('AIS nearby',S.ais.length,'',(S.ais[0]?`closest ${esc(S.ais[0].name||S.ais[0].mmsi)} ${f0(S.ais[0].dist)} m`:'within 600 m')
+        +(nNet()?` · ${nNet()} internet`:'')+(aisDown()?' · <span style="color:var(--warn)">local feed down</span>':'')),
   ].join('');
   $('log').innerHTML=S.events.slice().reverse().map(e=>`<div><span class="t">${clock(e.t)}</span><span class="${e.kind}">${esc(e.text)}</span></div>`).join('')||'<div class="note">Nothing yet.</div>';
   $('maphint').textContent=p?`${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}`:'';
@@ -368,10 +376,18 @@ function render(){
      +`If the PC stops answering for ${mins} min, the monitor alerts your phone. Pings every ${Math.round((al.every_s||300)/60)} min${al.last_ok?', last '+clock(al.last_ok):''}.`
      +(al.note?` <b>To do:</b> ${esc(al.note)}.`:'');
   renderGps();
+  const na=S.net_ais||{}, nst=$('netAisStatus');
+  nst.innerHTML=!na.configured?'Not set up: put your aisstream.io API key in <b>aisstream.json</b> on the watch PC (see aisstream.example.json), then press <b>Reconnect</b>.'
+    :!S.settings.internet_ais?'Off.'
+    :(na.last_error?`<span style="color:var(--bad)">${esc(na.last_error)}</span> `:'')
+     +(na.connected?`Connected · ${na.ships} ship${na.ships===1?'':'s'} in the area${na.last_message?' · last report '+clock(na.last_message):''}.`:'Connecting…')
+     +' Ships from the own AIS receiver always take priority; internet ships are drawn hollow.';
   $('footer').textContent=`Anchor Watch ${S.version||''} · not for navigation`;
   drawMap();
 }
 // AIS feed counts as down when not connected, or when nothing arrived for 30 s (the Core sends every 5 s)
+function netOk(){const n=S.net_ais;return !!(n&&n.connected&&S.settings.internet_ais)}
+function nNet(){return S.ais.filter(t=>t.src==='internet').length}
 function aisDown(){const a=S.ais_stream;return a&&(!a.connected||a.last_message_age==null||a.last_message_age>30)}
 function distBig(){return S.distance!=null?`${f0(S.distance)}<small> m</small>`:''}
 // fixed elements, only their text changes, so a tap on the button is never lost to a re-render
@@ -445,8 +461,10 @@ function drawMap(){
   ly.ais.clearLayers();
   for(const t of S.ais){
     const hd=t.heading!=null?t.heading:t.cog;
-    const html=`<svg viewBox="-7 -7 14 14" width="14" height="14" style="transform:rotate(${hd==null?0:hd}deg)">${hd==null?'<circle r="4"/>':'<path d="M0-6L4 5H-4Z"/>'}</svg><span>${esc(t.name||t.mmsi)}</span>`;
-    L.marker([t.lat,t.lon],{icon:icon('ais-ic',html,14),keyboard:false,title:`${t.name||''} ${t.mmsi} · ${f0(t.dist)} m${t.sog!=null?' · '+t.sog+' kn':''}`}).addTo(ly.ais);
+    const net=t.src==='internet';   // internet AIS: hollow marker, italic name, age shown
+    const html=`<svg viewBox="-7 -7 14 14" width="14" height="14" style="transform:rotate(${hd==null?0:hd}deg)">${hd==null?'<circle r="4"/>':'<path d="M0-6L4 5H-4Z"/>'}</svg><span>${esc(t.name||t.mmsi)}${net?' · '+ago(t.age):''}</span>`;
+    L.marker([t.lat,t.lon],{icon:icon('ais-ic'+(net?' net':''),html,14),keyboard:false,
+      title:`${t.name||''} ${t.mmsi} · ${f0(t.dist)} m${t.sog!=null?' · '+t.sog+' kn':''} · ${net?'internet AIS, '+ago(t.age)+' old':'own AIS receiver'}`}).addTo(ly.ais);
   }
   if(view.auto)fitView();
 }
@@ -493,6 +511,7 @@ function renderGps(){
 }
 $('gpsSel').onchange=e=>{const order=gpsOrder(e.target.value);
   cmd({action:'settings',settings:{gps_sources:order}},$('settingsMsg')).then(ok=>{if(ok){document.querySelector('[data-s=gps_sources]').value=order;$('settingsMsg').textContent='GPS source saved'}})};
+$('netAisCheck').onclick=()=>cmd({action:'net_ais_check'},$('settingsMsg')).then(ok=>{if(ok)$('settingsMsg').textContent='Reconnecting internet AIS'});
 $('pushTest').onclick=()=>cmd({action:'push_test'},$('settingsMsg')).then(ok=>{if(ok)$('settingsMsg').textContent='Test push sent'});
 $('newTrack').onclick=()=>{if(confirm('Start a new track? The recorded track and the max swing are deleted.'))cmd({action:'clear_track'})};
 $('mmsiSuggest').onclick=e=>{const m=e.target.dataset.mmsi;if(!m)return;

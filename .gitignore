@@ -13,6 +13,9 @@ pushover.json
 # Still-alive ping URL and healthchecks.io API key (still_alive.example.json shows the format)
 still_alive.json
 
+# aisstream.io API key for internet AIS (aisstream.example.json shows the format)
+aisstream.json
+
 # Runtime data: the anchor watch state holds the boat's positions and track
 anchor_state.json
 anchor_state.tmp

@@ -112,6 +112,14 @@ when the API key is in place), otherwise it alerts after the interval.
   10 m of the GPS is hidden and the page offers it as *Use as My MMSI*.
 - **AIS:** targets within 600 m are drawn on the map; boats within 120 m (or twice the radius) are kept in view.
   The *AIS nearby* tile says so when the AIS feed is down.
+- **Internet AIS** (optional, [aisstream.io](https://aisstream.io), free): adds ships the boat's own AIS receiver does
+  not see, e.g. with the instruments switched off. **The own receiver always has priority**: an internet report is
+  only used for a ship with no current local position (none, or older than 15 min). Internet ships are drawn hollow,
+  with the age of the report; My MMSI is hidden here too. The Orca app's own internet AIS cannot be used: it comes
+  from Orca's cloud straight to the app, not through the Core (checked with a capture, 2026-10-16).
+  Setup: on aisstream.io *Sign in with GitHub*, create a key under *API Keys*, copy `aisstream.example.json` to
+  `aisstream.json` (git-ignored) with the key, and press **Reconnect** under Alarm settings. Only the key and a box
+  of about 6 x 8 km around the boat are sent; the box follows the boat.
 - **GPS source** (Alarm settings): *Automatic* tries `4 → 127 → 3 → 254` (B&G iGPS, ZG100, Onwa AIS GPS, Orca Core),
   or pick one GPS to go first, e.g. **254, the Orca Core 2's own GPS**: with the rest of the NMEA 2000 network switched
   off to save the battery it is the only one left, and the watch keeps working on it. The next source in line takes
