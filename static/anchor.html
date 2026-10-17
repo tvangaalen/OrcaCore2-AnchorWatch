@@ -89,10 +89,11 @@ button.on{outline:2px solid var(--accent)}
 .ais-ic.net svg{fill:none;stroke:var(--ais);stroke-width:1.6}
 .ais-ic.net span{font-style:italic;opacity:.85}
 /* tiles follow the theme; seamarks are never colour-inverted so buoy colours keep their meaning */
-@media (prefers-color-scheme:dark){:root:not([data-theme]) .tl-osm{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}:root:not([data-theme]) .tl-satellite{filter:brightness(.8)}}
+@media (prefers-color-scheme:dark){:root:not([data-theme]) .tl-osm{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}:root:not([data-theme]) .tl-satellite{filter:brightness(.8)}:root:not([data-theme]) .tl-ihm{filter:brightness(.7) contrast(1.1)}}
 :root[data-theme="dark"] .tl-osm{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}
 :root[data-theme="dark"] .tl-satellite{filter:brightness(.8)}
-:root[data-theme="night"] .tl-osm{filter:invert(1) grayscale(1) brightness(.3) sepia(1) hue-rotate(-50deg) saturate(6)}
+:root[data-theme="dark"] .tl-ihm{filter:brightness(.7) contrast(1.1)}
+:root[data-theme="night"] .tl-osm,:root[data-theme="night"] .tl-ihm{filter:invert(1) grayscale(1) brightness(.3) sepia(1) hue-rotate(-50deg) saturate(6)}
 :root[data-theme="night"] .tl-satellite,:root[data-theme="night"] .tl-seamark,:root[data-theme="night"] .tl-depth{filter:grayscale(1) brightness(.4) sepia(1) hue-rotate(-50deg) saturate(6)}
 .mapctl{position:absolute;right:10px;top:10px;z-index:500;display:flex;flex-direction:column;gap:6px}
 .mapctl button{width:40px;height:40px;min-height:40px;padding:0;font-size:18px;opacity:.92}
@@ -146,7 +147,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:14px;padding:6px 0}
       <div class="mapwrap" id="mapwrap">
         <div id="map"></div>
         <div class="layerbar" id="layerbar">
-          <div class="lgroup"><button data-b="chart">Chart</button><button data-b="satellite">Satellite</button><button data-b="plain">Plain</button></div>
+          <div class="lgroup"><button data-b="sea" title="Official sea chart where available (Spanish waters), street map elsewhere">Sea chart</button><button data-b="street">Street map</button><button data-b="satellite">Satellite</button><button data-b="plain">Plain</button></div>
           <div class="lgroup"><button id="seaBtn">Seamarks</button><button id="depthBtn">Depth</button></div>
           <div class="dlegend" id="dlegend">depth <span>0 m</span><i></i><span>10 m+</span></div>
         </div>
@@ -400,14 +401,18 @@ function tile(l,v,u,s){return `<div class="tile"><div class="l">${l}</div><div c
 // ---------- map (Leaflet; tiles come through the watch PC, which keeps them for offline use)
 const OSM='© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>';
 const tl=(l,ext,maxN,attr)=>L.tileLayer(`/tiles/${l}/{z}/{x}/{y}.${ext}`,{maxNativeZoom:maxN,maxZoom:21,attribution:attr,className:'tl-'+l});
-const bases={chart:tl('osm','png',19,OSM),satellite:tl('satellite','jpg',19,'Imagery © Esri, Maxar, Earthstar Geographics'),plain:L.layerGroup()};
+// "Sea chart" = the official Spanish chart (IHM) over the street map: the chart covers Spanish waters, elsewhere its
+// tiles are transparent and the street map shows through
+const street=tl('osm','png',19,OSM).setZIndex(0);
+const ihm=tl('ihm','png',18,'Sea chart © <a href="https://ideihm.covam.es/portal/licencias/" target="_blank">Instituto Hidrográfico de la Marina</a>').setZIndex(1);
+const bases={sea:L.layerGroup([street,ihm]),street:L.layerGroup([street]),satellite:tl('satellite','jpg',19,'Imagery © Esri, Maxar, Earthstar Geographics'),plain:L.layerGroup()};
 const seamarks=tl('seamark','png',18,'Seamarks © <a href="https://www.openseamap.org" target="_blank">OpenSeaMap</a>');
 const depth=tl('depth','png',18,'Depth © <a href="https://depth.openseamap.org" target="_blank">OpenSeaMap contributors</a>');
 depth.setZIndex(2);seamarks.setZIndex(3);   // seamarks stay on top of depth dots
 const map=L.map('map',{zoomControl:false,preferCanvas:true,zoomSnap:1,maxZoom:21}).setView([39,1.5],9);
 map.attributionControl.setPrefix('<a href="https://leafletjs.com" target="_blank">Leaflet</a> · not for navigation');
 L.control.scale({imperial:false,position:'bottomleft'}).addTo(map);
-let base=LS.get('base','chart');if(!bases[base])base='chart';
+let base=LS.get('base','sea');if(base==='chart')base='sea';if(!bases[base])base='sea';   // 'chart' = name before 1.4.0
 function setBase(b){map.removeLayer(bases[base]);base=b;LS.set('base',b);bases[b].addTo(map);if(bases[b].bringToBack)bases[b].bringToBack();
   for(const x of $('layerbar').querySelectorAll('[data-b]'))x.classList.toggle('sel',x.dataset.b===b)}
 function setSeamarks(on){LS.set('seamarks',on?'1':'0');if(on)seamarks.addTo(map);else map.removeLayer(seamarks);$('seaBtn').classList.toggle('sel',on)}

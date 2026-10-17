@@ -4,6 +4,21 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.4 — Official sea chart
+
+### 1.4.0
+- **Sea chart layer with the official Spanish electronic charts** of the Instituto Hidrográfico de la Marina (WMS
+  `ideihm.covam.es/wms/enc`, layer `RasterENC`), fetched per tile through the PC's tile cache like the other layers.
+  At the anchorage it shows soundings, the 5 m contour, rocks, buoys and lights, the anchorage symbol and restricted
+  areas. Outside Spanish waters the service returns transparent tiles, so *Sea chart* shows the street map there.
+  Attribution "© Instituto Hidrográfico de la Marina" as the IHM licence requires (non-commercial use).
+- The base layers are now *Sea chart* (default), *Street map* (the former *Chart*, which was only OpenStreetMap's land
+  map), *Satellite* and *Plain*; a saved *Chart* choice becomes *Sea chart*. Dark mode dims the sea chart instead of
+  inverting it; night mode turns it dark red like the rest.
+- Looked for official sources for Italy and Greece: none usable without an agreement (see README).
+
+---
+
 ## 1.3 — Internet AIS
 
 ### 1.3.0

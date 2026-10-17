@@ -133,10 +133,18 @@ when the API key is in place), otherwise it alerts after the interval.
 
 ### Map
 
-- **Layers:** *Chart* (OpenStreetMap), *Satellite* (Esri World Imagery) or *Plain*, plus OpenSeaMap overlays:
-  *Seamarks* (buoys, beacons, lights) and *Depth* (crowd-sourced soundings from other boats' tracks, coloured red 0 m
-  to green 10 m or more, plus coarse contours; sparse, and only where someone has logged). None of these are
-  official charts. The Orca Core holds no chart data (the Orca app keeps its licensed charts on the phone).
+- **Layers:**
+  - *Sea chart*: the **official Spanish electronic charts** of the Instituto Hidrográfico de la Marina (IHM) in
+    Spanish waters (depth contours and soundings, rocks, buoys and lights, anchorages, restricted areas), over the
+    street map elsewhere, where the chart service is transparent. Free for non-commercial use with the attribution
+    "© Instituto Hidrográfico de la Marina" ([licence](https://ideihm.covam.es/portal/licencias/)); not for navigation.
+  - *Street map* (OpenStreetMap): land map only, the sea is plain blue.
+  - *Satellite* (Esri World Imagery) and *Plain*.
+  - Overlays from OpenSeaMap: *Seamarks* (buoys, beacons, lights) and *Depth* (crowd-sourced soundings from other
+    boats' tracks, coloured red 0 m to green 10 m or more, plus coarse contours; sparse).
+  - No official source could be used for Italy (no public chart service of the Istituto Idrografico della Marina) or
+    Greece (the HNHS chart service needs an application and agreement), and CM93 (C-MAP) is proprietary data that is
+    not built in. The Orca Core holds no chart data (the Orca app keeps its licensed charts on the phone).
 - **Offline:** the PC fetches tiles on demand and keeps them in `tile_cache/` (refreshed after 30 days; the old copy
   is used when there is no internet). Any area viewed while online stays available offline. Nothing is
   bulk-downloaded, in line with the OpenStreetMap tile policy. With no internet and no cached tiles, the circle, track

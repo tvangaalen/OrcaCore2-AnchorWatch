@@ -209,6 +209,13 @@ class TileCacheTest(unittest.TestCase):
         self.assertIn("request=GetMap", self.calls[0]); self.assertIn("bbox=" + tile_bbox_3857(16, 33034, 25110), self.calls[0])
         self.assertIn("layers=openseamap:tracks_10m,openseamap:contour2,openseamap:contour", self.calls[0])
 
+    def test_official_spanish_chart_is_wms_by_tile_bbox(self):
+        from anchor_watch import tile_bbox_3857
+        with self.fake(b"PNG"): self.assertEqual(self.cache.get("ihm", 15, 8584, 6201), (b"PNG", "image/png"))
+        u = self.calls[0]
+        self.assertTrue(u.startswith("https://ideihm.covam.es/wms/enc?")); self.assertIn("layers=RasterENC", u)
+        self.assertIn("crs=EPSG:3857&bbox=" + tile_bbox_3857(15, 8584, 6201), u); self.assertIn("transparent=true", u)
+
     def test_out_of_range_rejected(self):
         with self.fake(b"X"):
             self.assertIsNone(self.cache.get("osm", 20, 0, 0)); self.assertIsNone(self.cache.get("osm", 2, 4, 0))

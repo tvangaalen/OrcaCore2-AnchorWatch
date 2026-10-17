@@ -33,6 +33,11 @@ Overview: `README.md`. Release history: `CHANGELOG.md`.
   test can never send a real alert, ping or subscription.
 - Times are always shown 24-hour (`clock()` / `dayTime()` in the page); never use locale time defaults (AM/PM).
 - Map tiles are fetched on demand only (OpenStreetMap tile policy): no bulk or prefetch downloads.
+- Only add chart sources whose terms allow this use. The IHM (Spain) licence allows non-commercial use and requires
+  the attribution "© Instituto Hidrográfico de la Marina", so keep it. Do not add HNHS (Greece) tiles without their
+  written agreement, and never decode, convert or commit CM93 / C-MAP or other proprietary chart data.
+- Never colour-invert charts in dark mode (depth-area and light colours carry meaning); dim them instead. Night
+  mode may invert, because everything is tinted red there anyway.
 - Never commit `pushover.json` (Pushover keys), `still_alive.json` (ping URL, API key), `aisstream.json` (aisstream.io key), `certs/`, `anchor_state.json`, `tile_cache/`, `captures/` or `recordings/` (all in `.gitignore`).
   They hold keys, the boat's positions and network captures. Keep real MMSIs and anchorage positions out of tests.
 
