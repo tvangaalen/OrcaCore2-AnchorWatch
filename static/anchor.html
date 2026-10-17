@@ -404,7 +404,7 @@ const tl=(l,ext,maxN,attr)=>L.tileLayer(`/tiles/${l}/{z}/{x}/{y}.${ext}`,{maxNat
 // "Sea chart" = the official Spanish chart (IHM) over the street map: the chart covers Spanish waters, elsewhere its
 // tiles are transparent and the street map shows through
 const street=tl('osm','png',19,OSM).setZIndex(0);
-const ihm=tl('ihm','png',18,'Sea chart © <a href="https://ideihm.covam.es/portal/licencias/" target="_blank">Instituto Hidrográfico de la Marina</a>').setZIndex(1);
+const ihm=tl('ihm','png',16,'Sea chart © <a href="https://ideihm.covam.es/portal/licencias/" target="_blank">Instituto Hidrográfico de la Marina</a>').setZIndex(1);
 const bases={sea:L.layerGroup([street,ihm]),street:L.layerGroup([street]),satellite:tl('satellite','jpg',19,'Imagery © Esri, Maxar, Earthstar Geographics'),plain:L.layerGroup()};
 const seamarks=tl('seamark','png',18,'Seamarks © <a href="https://www.openseamap.org" target="_blank">OpenSeaMap</a>');
 const depth=tl('depth','png',18,'Depth © <a href="https://depth.openseamap.org" target="_blank">OpenSeaMap contributors</a>');

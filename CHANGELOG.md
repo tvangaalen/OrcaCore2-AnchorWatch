@@ -6,6 +6,11 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ## 1.4 — Official sea chart
 
+### 1.4.1
+- No more vertical stripes over the sea chart when zoomed in. From zoom 17 the IHM service draws the ENC "overscale"
+  pattern wherever the display is larger than the chart's compilation scale, which at the anchorage covers
+  everything. The sea chart is now fetched up to zoom 16 and enlarged beyond that: same chart content, no stripes.
+
 ### 1.4.0
 - **Sea chart layer with the official Spanish electronic charts** of the Instituto Hidrográfico de la Marina (WMS
   `ideihm.covam.es/wms/enc`, layer `RasterENC`), fetched per tile through the PC's tile cache like the other layers.
