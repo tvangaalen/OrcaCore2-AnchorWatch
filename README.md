@@ -52,7 +52,7 @@ the phone locked and without Teleport:
 
 | Alarm | Pushover priority |
 |---|---|
-| Anchor drag | **Emergency**: repeats every minute (for up to an hour) until acknowledged on the phone |
+| Anchor drag | **Emergency**: repeats every 30 s (Pushover's minimum) for up to 3 h until you tap *Acknowledge* in Pushover |
 | GPS lost, no data from the Core, depth, wind | High |
 | Alarm cleared | Normal (and the emergency for it is cancelled) |
 
@@ -67,8 +67,15 @@ Setup, once:
 3. Copy `pushover.example.json` to `pushover.json` next to `anchor_watch.py` and fill in both keys
    (`pushover.json` is in `.gitignore`; never commit it). Optional: `emergency_sound`, `device`.
 4. In the app, under *Alarm settings*, press **Send test** (no restart needed).
-5. In the Pushover iPhone app, turn on **Critical Alerts** for emergency-priority messages, so an anchor drag sounds
-   even in silent mode and Focus / Do Not Disturb.
+5. On the iPhone: in the Pushover app, *Settings → Critical Alerts*, turn on critical alerts for emergency-priority
+   messages and allow them when iOS asks; check *iPhone Settings → Notifications → Pushover* that *Critical Alerts*
+   and *Allow Notifications* are on. Then an anchor drag sounds even in silent mode and Focus / Do Not Disturb.
+6. Press **Test alarm**: a real emergency message that repeats every 30 s until you tap *Acknowledge* in Pushover or
+   press **Stop test alarm** (it stops by itself after 10 minutes). Check it rings with the phone on silent.
+
+iOS limits the sound of one notification to 30 seconds, so no push app can ring without a break; repeating every
+30 s until acknowledged is the closest there is. With the page open on the phone (sound on), the page itself also
+keeps beeping until the alarm is silenced.
 
 *Phone alerts (Pushover)* in Alarm settings switches them off. Alerts need the PC and its internet link: if either is
 down, nothing can be sent. That is what the still-alive check is for.

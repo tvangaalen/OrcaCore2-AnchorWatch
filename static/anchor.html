@@ -246,6 +246,9 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
             <label class="check"><input type="checkbox" data-s="push_alerts"> Phone alerts (Pushover)</label>
             <button class="small" id="pushTest">Send test</button>
           </div>
+          <div class="row" style="margin-top:6px">
+            <button class="small" id="alarmTest">Test alarm</button><button class="small" id="alarmStop">Stop test alarm</button>
+          </div>
           <div class="note" id="pushStatus" style="margin-top:4px"></div>
           <div class="row" style="margin-top:10px;align-items:flex-end">
             <label class="f">Still-alive check (min, 0 = off)<input type="number" data-s="alive_minutes" min="0" max="1440" step="5"></label>
@@ -384,7 +387,7 @@ function render(){
   const ps=S.push||{}, pst=$('pushStatus');
   pst.innerHTML=!ps.configured?'Not set up: put your Pushover keys in <b>pushover.json</b> on the watch PC (see pushover.example.json), then press <b>Send test</b>.'
     :ps.last_error?`<span style="color:var(--bad)">Last push failed: ${esc(ps.last_error)}</span>`
-    :`Ready. Anchor drag = emergency alert, repeating until acknowledged; GPS/Core lost, depth and wind = high priority.${ps.last_sent?' Last sent '+clock(ps.last_sent)+'.':''}`;
+    :`Ready. Anchor drag = emergency alert that repeats every 30 s (up to 3 h) until you tap Acknowledge in Pushover; GPS/Core lost, depth and wind = high priority. <b>Test alarm</b> sends a real emergency alert.${ps.last_sent?' Last sent '+clock(ps.last_sent)+'.':''}`;
   const al=S.alive||{}, ast=$('aliveStatus'), mins=+S.settings.alive_minutes;
   ast.innerHTML=!al.configured?'Not set up: put your healthchecks.io ping URL in <b>still_alive.json</b> on the watch PC (see still_alive.example.json), then press <b>Ping now</b>.'
     :!mins?'Off.'+(al.note?' Now '+esc(al.note)+'.':'')
@@ -589,6 +592,9 @@ function renderGps(){
 $('gpsSel').onchange=e=>{const order=gpsOrder(e.target.value);
   cmd({action:'settings',settings:{gps_sources:order}},$('settingsMsg')).then(ok=>{if(ok){document.querySelector('[data-s=gps_sources]').value=order;$('settingsMsg').textContent='GPS source saved'}})};
 $('netAisCheck').onclick=()=>cmd({action:'net_ais_check'},$('settingsMsg')).then(ok=>{if(ok)$('settingsMsg').textContent='Reconnecting internet AIS'});
+$('alarmTest').onclick=()=>{if(confirm('Send a real test alarm? Your phone rings every 30 s until you tap Acknowledge in Pushover or press "Stop test alarm" (at most 10 minutes).'))
+  cmd({action:'push_alarm_test'},$('settingsMsg')).then(ok=>{if(ok)$('settingsMsg').textContent='Test alarm sent'})};
+$('alarmStop').onclick=()=>cmd({action:'push_alarm_stop'},$('settingsMsg')).then(ok=>{if(ok)$('settingsMsg').textContent='Test alarm stopped'});
 $('pushTest').onclick=()=>cmd({action:'push_test'},$('settingsMsg')).then(ok=>{if(ok)$('settingsMsg').textContent='Test push sent'});
 $('newTrack').onclick=()=>{if(confirm('Start a new track? The recorded track and the max swing are deleted.'))cmd({action:'clear_track'})};
 $('mmsiSuggest').onclick=e=>{const m=e.target.dataset.mmsi;if(!m)return;

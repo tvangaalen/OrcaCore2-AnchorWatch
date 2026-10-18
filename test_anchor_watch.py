@@ -355,7 +355,8 @@ class PushoverTest(unittest.TestCase):
         self.run_queue([{"status": 1, "receipt": "R123"}, {"status": 1}])
         path, f = self.posts[0]
         self.assertEqual(path, "messages.json")
-        self.assertEqual((f["priority"], f["retry"], f["expire"], f["token"], f["user"]), (2, 60, 3600, self.TOK, self.USR))
+        self.assertEqual((f["priority"], f["retry"], f["expire"], f["token"], f["user"]), (2, 30, 10800, self.TOK, self.USR))
+        self.assertEqual(f["sound"], "persistent")
         self.assertEqual(f["url"], "https://192.168.1.10:8766/")
         self.assertEqual(self.posts[1], ("receipts/R123/cancel.json", {"token": self.TOK}))
         self.assertEqual(self.p.receipts, {})
@@ -365,6 +366,13 @@ class PushoverTest(unittest.TestCase):
         self.run_queue([{"status": 1}, {"status": 1}])
         self.assertEqual(self.posts[0][0], "receipts/R9/cancel.json")
         self.assertEqual(self.posts[1][1]["priority"], 0); self.assertNotIn("retry", self.posts[1][1])
+
+    def test_test_alarm_is_a_short_emergency_that_can_be_stopped(self):
+        self.p.test_alarm(); self.p.cancel("test")
+        self.run_queue([{"status": 1, "receipt": "RT"}, {"status": 1}])
+        f = self.posts[0][1]
+        self.assertEqual((f["priority"], f["retry"], f["expire"]), (2, 30, 600)); self.assertIn("TEST", f["title"])
+        self.assertEqual(self.posts[1][0], "receipts/RT/cancel.json")
 
     def test_gps_lost_is_high_priority_not_emergency(self):
         self.p.alarm("gps", "GPS", "lost", 1000); self.run_queue([{"status": 1}])
@@ -540,6 +548,17 @@ class InternetAISTest(unittest.TestCase):
         self.assertEqual(sent[0]["APIKey"], self.KEY); self.assertEqual(sent[0]["BoundingBoxes"], [self.n.box(LAT, LON)])
         self.assertIn("ShipStaticData", sent[0]["FilterMessageTypes"])
         self.assertEqual(len(self.n.targets), 1); self.assertIsNone(self.n.last_error); self.assertEqual(sleeps, [5])
+
+    def test_reconnects_after_a_drop_and_keeps_the_new_connection(self):
+        # 2026-10-18: after one dropped connection the next one was broken off again right after aisstream's
+        # SubscriptionConfirmation, because the old error was still set; internet AIS never came back.
+        import websockets
+        self.n.last_error = "connection closed: no close frame received or sent"     # left over from the drop
+        events = []; self.n.on_event = lambda t, k: events.append(t)
+        sent, sleeps = self.run_loop([{"MessageType": "SubscriptionConfirmation"},
+                                      self.pos("987654321", *offset(LAT, LON, 0, 200))])
+        self.assertEqual(len(self.n.targets), 1)          # the position after the confirmation was still read
+        self.assertIsNone(self.n.last_error); self.assertEqual(sleeps, [5])
 
     def test_abrupt_close_after_subscribing_counts_as_refused_and_logs_once(self):
         import websockets

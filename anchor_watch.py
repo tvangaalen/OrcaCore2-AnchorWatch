@@ -34,7 +34,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -271,9 +271,14 @@ class InternetAIS:
                         try: raw = await asyncio.wait_for(ws.recv(), 30)
                         except asyncio.TimeoutError: raw = None
                         if raw is not None:
-                            self.handle(json.loads(raw))
-                            if self.last_error and not got: break      # refused (bad key): do not hammer the service
-                            got = True; self.last_error = None; delay = 5
+                            m = json.loads(raw)
+                            if m.get("error"):                         # refused (bad key): do not hammer the service
+                                self.last_error = f"aisstream.io: {m['error']}"; break
+                            # only an error in THIS connection counts: a "connection closed" left over from the
+                            # previous one must not break off the new connection (it did until 1.5.1)
+                            self.handle(m); got = True; self.last_error = None; delay = 5
+                            if self.logged_error:
+                                self.on_event("Internet AIS: receiving again", "ok"); self.logged_error = None
                         now_c = self.center()
                         if now_c and dist_bearing_m(*self.box_center, *now_c)[0] > self.MOVE_M: break   # new box around the boat
             except asyncio.CancelledError: raise
@@ -305,7 +310,10 @@ class Pushover:
     """
     API = "https://api.pushover.net/1"
     PRIORITY = {"drag": 2, "gps": 1, "core": 1, "depth": 1, "wind": 1}   # 2 = emergency, 1 = high
-    RETRY_S, EXPIRE_S = 60, 3600                                        # emergency: repeat every minute for an hour
+    # Emergency: repeat every 30 s (Pushover's minimum) for up to 3 h (its maximum) until acknowledged in the app.
+    # iOS caps one notification's sound at 30 s, so this is as close to "rings until I stop it" as a push can get.
+    RETRY_S, EXPIRE_S = 30, 10800
+    TEST_EXPIRE_S = 600                                                 # a forgotten test alarm stops after 10 min
     KEY_RE = re.compile(r"^[A-Za-z0-9]{30}$")
     BACKOFF_S = (5, 15, 45)
 
@@ -345,6 +353,13 @@ class Pushover:
         """Stops the repeating emergency for one alarm, or (no key) for all of them."""
         self.q.put(("cancel", key or "*", None))
 
+    def test_alarm(self):
+        """A real emergency message (repeats, Critical Alert), so the phone set-up can be checked without a drag."""
+        self.q.put(("send", "test", {"title": "\u2693 TEST anchor alarm", "priority": 2, "timestamp": int(time.time()),
+                                     "expire": self.TEST_EXPIRE_S,
+                                     "message": "Test of the anchor-drag alarm. It repeats every 30 s until you tap Acknowledge "
+                                                "in Pushover (or press Stop test alarm), at most 10 minutes."}))
+
     def test(self):
         self.q.put(("send", None, {"title": "Anchor Watch test", "priority": 0, "timestamp": int(time.time()),
                                    "message": "Push alerts work. Anchor drag alarms arrive as emergency alerts that repeat until acknowledged."}))
@@ -365,7 +380,8 @@ class Pushover:
         if self.cfg.get("device"): fields["device"] = self.cfg["device"]
         if self.page_url: fields.update(url=self.page_url, url_title="Open Anchor Watch")
         if msg["priority"] == 2:
-            fields.update(retry=self.RETRY_S, expire=self.EXPIRE_S, sound=self.cfg.get("emergency_sound", "persistent"))
+            fields.setdefault("retry", self.RETRY_S); fields.setdefault("expire", self.EXPIRE_S)
+            fields["sound"] = self.cfg.get("emergency_sound", "persistent")
         elif self.cfg.get("sound"): fields["sound"] = self.cfg["sound"]
         r = self._post("messages.json", fields)
         if key and r.get("receipt"): self.receipts[key] = r["receipt"]
@@ -672,6 +688,12 @@ class AnchorWatch:
                     self.settings[k] = v
                 self.event("Settings changed", now)
                 if self.alive is not None and "alive_minutes" in (c.get("settings") or {}): self.alive.poke()
+            elif act in ("push_alarm_test", "push_alarm_stop"):
+                if self.notifier is None: raise ValueError("Push alerts are not available")
+                err = self.notifier.reload()
+                if err: raise ValueError(f"Pushover is not set up: {err}")
+                if act == "push_alarm_test": self.notifier.test_alarm(); self.event("Test alarm (emergency) sent to Pushover", now, "warn")
+                else: self.notifier.cancel("test"); self.event("Test alarm stopped", now)
             elif act == "push_test":
                 if self.notifier is None: raise ValueError("Push alerts are not available")
                 err = self.notifier.reload()

@@ -6,6 +6,18 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ## 1.5 — Sun times, precise anchor moves
 
+### 1.5.1
+- **Internet AIS now recovers after a dropped connection.** The old "connection closed" error was still set when the
+  next connection came up, so the check for a refused key broke that connection off right after aisstream.io's
+  subscription confirmation, again and again with growing waits: after one drop internet AIS stayed down until the
+  program was restarted (seen from 07:43 to after 11:47 on 2026-10-18). Only an error in the current connection
+  counts now; recovery is logged as "receiving again".
+- **Anchor-drag alarm on the phone repeats every 30 s for up to 3 h** (was every 60 s for 1 h), the closest Pushover and
+  iOS get to "ring until I stop it".
+- **Test alarm** / **Stop test alarm** under Phone alerts: a real emergency message (repeating, Critical Alert), so the
+  phone set-up can be checked without a drag; *Send test* only sent a normal message. A test alarm stops after
+  10 minutes on its own.
+
 ### 1.5.0
 - **Sunrise and sunset** tile with icons, for the boat's position, in 24-hour local time and with the time left to
   the next one; computed on the page with the usual solar formulas (checked against NOAA's: within 2 minutes), so
