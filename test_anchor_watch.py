@@ -199,15 +199,14 @@ class TileCacheTest(unittest.TestCase):
         with self.fake(b"X"): self.assertIsNone(self.cache.get("seamark", 12, 5, 5))
         self.assertEqual(len(self.calls), 1)
 
-    def test_depth_is_wms_with_tile_bbox(self):
+    def test_tile_bbox_3857(self):
         from anchor_watch import tile_bbox_3857
         self.assertEqual(tile_bbox_3857(0, 0, 0), "-20037508.34,-20037508.34,20037508.34,20037508.34")
-        minx, miny, maxx, maxy = map(float, tile_bbox_3857(16, 33034, 25110).split(","))   # tile over the anchorage
+        minx, miny, maxx, maxy = map(float, tile_bbox_3857(16, 33034, 25110).split(","))
         self.assertAlmostEqual(maxx - minx, 611.5, delta=0.1); self.assertLess(minx, 163006); self.assertGreater(maxx, 163006)
-        self.assertLess(miny, 4682456); self.assertGreater(maxy, 4682456)
-        with self.fake(b"PNG"): self.cache.get("depth", 16, 33034, 25110)
-        self.assertIn("request=GetMap", self.calls[0]); self.assertIn("bbox=" + tile_bbox_3857(16, 33034, 25110), self.calls[0])
-        self.assertIn("layers=openseamap:tracks_10m,openseamap:contour2,openseamap:contour", self.calls[0])
+
+    def test_depth_source_removed(self):
+        self.assertNotIn("depth", TileCache.SOURCES)
 
     def test_official_spanish_chart_is_wms_by_tile_bbox(self):
         from anchor_watch import tile_bbox_3857

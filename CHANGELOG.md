@@ -4,6 +4,22 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.5 — Sun times, precise anchor moves
+
+### 1.5.0
+- **Sunrise and sunset** tile with icons, for the boat's position, in 24-hour local time and with the time left to
+  the next one; computed on the page with the usual solar formulas (checked against NOAA's: within 2 minutes), so
+  it works offline. Polar day/night says so.
+- **Move anchor on map** now keeps a draft position: click the map and/or nudge it with the arrow keys (1 m,
+  Shift = 10 m) or the arrow buttons in the bar on a phone. The circle and anchor move with it, the bar shows the
+  offset (e.g. "3 m N, 9 m E"), and nothing is sent until *Save* or Enter; Esc cancels. Clicking no longer asks for
+  confirmation, *Save* does that job. The map's own arrow-key panning is off while moving.
+- **Depth overlay removed**: OpenSeaMap's crowd-sourced soundings added nothing at the anchorage now that the official
+  sea chart has real soundings.
+- **Checkboxes** are drawn in the theme's colours, so they turn dark red in night mode instead of staying light.
+
+---
+
 ## 1.4 — Official sea chart
 
 ### 1.4.1

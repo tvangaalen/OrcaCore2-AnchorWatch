@@ -104,7 +104,11 @@ when the API key is in place), otherwise it alerts after the interval.
   no data from the Core, and optional minimum depth and maximum true wind. *Silence* mutes for 5 min; an alarm that
   clears and comes back sounds again.
 - **Dropping:** *Dropping now* puts the anchor at the bow (GPS position + *GPS → bow roller* along the heading);
-  *Already lying to it* puts it a given distance further ahead. *Move anchor on map* corrects it afterwards.
+  *Already lying to it* puts it a given distance further ahead. *Move anchor on map* corrects it afterwards: click
+  the map and/or nudge it with the arrow keys (1 m, Shift = 10 m; on the phone the arrow buttons in the bar); the
+  circle follows, and nothing changes until *Save* (or Enter). Esc cancels.
+- **Sun:** sunrise and sunset for the boat's position (computed on the page, no internet needed), in 24-hour time,
+  with the time left to the next one.
   The rode helper suggests a radius from rode length, depth and bow height.
 - **Track:** the last 24 h (setting *Track kept*) is drawn on the map, older parts fainter. *Start new track* under
   the map deletes the recorded track and the max swing and starts afresh; the anchor watch itself carries on.
@@ -140,8 +144,7 @@ when the API key is in place), otherwise it alerts after the interval.
     "© Instituto Hidrográfico de la Marina" ([licence](https://ideihm.covam.es/portal/licencias/)); not for navigation.
   - *Street map* (OpenStreetMap): land map only, the sea is plain blue.
   - *Satellite* (Esri World Imagery) and *Plain*.
-  - Overlays from OpenSeaMap: *Seamarks* (buoys, beacons, lights) and *Depth* (crowd-sourced soundings from other
-    boats' tracks, coloured red 0 m to green 10 m or more, plus coarse contours; sparse).
+  - Overlay from OpenSeaMap: *Seamarks* (buoys, beacons, lights).
   - No official source could be used for Italy (no public chart service of the Istituto Idrografico della Marina) or
     Greece (the HNHS chart service needs an application and agreement), and CM93 (C-MAP) is proprietary data that is
     not built in. The Orca Core holds no chart data (the Orca app keeps its licensed charts on the phone).

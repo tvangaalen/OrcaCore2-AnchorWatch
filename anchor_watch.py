@@ -16,7 +16,7 @@ digit), and with no usable source left the GPS alarm goes off.
 
 State (anchor, settings, track, events) is kept in anchor_state.json so a restart does not lose the watch.
 
-Map tiles (official Spanish charts of the IHM, OpenStreetMap, OpenSeaMap seamarks and depth, Esri satellite) are
+Map tiles (official Spanish charts of the IHM, OpenStreetMap, OpenSeaMap seamarks, Esri satellite) are
 fetched by this PC and kept in tile_cache/, so
 areas viewed while online still show offline. Only tiles a page asks for are fetched; nothing is bulk-downloaded.
 """
@@ -34,7 +34,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.4.1"
+VERSION = "1.5.0"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -788,8 +788,6 @@ class TileCache:
         "osm": ("https://tile.openstreetmap.org/{z}/{x}/{y}.png", "png", 19),
         "seamark": ("https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png", "png", 18),
         "satellite": ("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", "jpg", 19),
-        # OpenSeaMap crowd-sourced depth: sounding track points (red 0 m -> green >= 10 m) and contours. This is a WMS,
-        # so each tile is asked for by its EPSG:3857 bounding box (as map.openseamap.org does).
         # Official Spanish electronic charts (ENC) of the Instituto Hidrografico de la Marina, as a WMS. Free for
         # non-commercial use with the attribution "(c) Instituto Hidrografico de la Marina", not for navigation
         # (ideihm.covam.es/portal/licencias/). Transparent outside Spanish waters, so the street map shows there.
@@ -797,9 +795,6 @@ class TileCache:
         # is larger than the chart's compilation scale, which covers the whole anchorage; the page enlarges z16 instead.
         "ihm": ("https://ideihm.covam.es/wms/enc?service=WMS&version=1.3.0&request=GetMap&layers=RasterENC&styles="
                 "&crs=EPSG:3857&bbox={bbox}&width=256&height=256&format=image/png&transparent=true", "png", 16),
-        "depth": ("https://depth.openseamap.org/geoserver/openseamap/wms?service=WMS&version=1.1.0&request=GetMap&styles="
-                  "&layers=openseamap:tracks_10m,openseamap:contour2,openseamap:contour&srs=EPSG:3857&bbox={bbox}"
-                  "&width=256&height=256&format=image/png&transparent=true", "png", 18),
     }
     MAX_AGE, MISSING_AGE = 30 * 86400, 7 * 86400
     USER_AGENT = "OrcaCore2-AnchorWatch/1.0 (personal anchor alarm, tiles cached locally)"
