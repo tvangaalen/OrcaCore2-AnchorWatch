@@ -4,6 +4,20 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.7 — Depth and chain advice
+
+### 1.7.0
+- **Depth over the next 24 h** in the Tide tile: lowest and highest depth with their times, from the depth now and the
+  tide curve (`depth_window`). The depth is below the waterline when the sounder reports a positive transducer offset
+  (added), otherwise below the transducer (marked).
+- **Chain advice in whole metres**: scope x (highest depth in the next 24 h + bow height), rounded up
+  (`chain_advice`); new settings *Bow height above water* (1.2 m) and *Scope for chain advice* (5:1).
+- With the sounder off, the **last depth reading** (kept over restarts) is used, corrected for the tide since it was
+  taken, and only within 150 m (or twice the radius) of where it was taken, so a reading from another anchorage is
+  never used.
+
+---
+
 ## 1.6 — Tide
 
 ### 1.6.0

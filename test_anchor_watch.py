@@ -619,5 +619,70 @@ class TideTest(unittest.TestCase):
         finally: d.cleanup()
 
 
+class DepthPlanTest(unittest.TestCase):
+    P = 12.42 * 3600
+
+    def tide(self, start, hours=72, amp=0.10):
+        return [[start + i * 3600, round(-0.4 + amp * math.cos(2 * math.pi * i * 3600 / self.P), 3)] for i in range(hours)]
+
+    def test_window_min_max_and_chain(self):
+        from anchor_watch import chain_advice, depth_window
+        s = self.tide(1_000_000); now = s[0][0] + 6 * 3600
+        w = depth_window(s, now, 8.0, now)                       # live reading of 8.0 m now
+        self.assertEqual(w["now"], 8.0)
+        self.assertAlmostEqual(w["max"] - w["min"], 0.20, delta=0.01)          # the full tidal range fits in 24 h
+        self.assertTrue(now <= w["min_t"] <= now + 86400 and now <= w["max_t"] <= now + 86400)
+        self.assertEqual(chain_advice(w["max"], 1.2, 5), math.ceil((w["max"] + 1.2) * 5))
+        self.assertEqual(chain_advice(8.0, 1.2, 5), 46); self.assertEqual(chain_advice(8.01, 1.2, 5), 47)   # whole metres, up
+        self.assertIsNone(depth_window(s, s[-1][0] - 3600, 8.0, s[-1][0] - 3600))   # 24 h not covered
+
+    def test_last_reading_is_corrected_for_the_tide(self):
+        from anchor_watch import depth_window, tide_at
+        s = self.tide(1_000_000); then = s[0][0] + 2 * 3600; now = s[0][0] + 8 * 3600
+        w = depth_window(s, now, 8.0, then)
+        self.assertAlmostEqual(w["now"], 8.0 + tide_at(s, now) - tide_at(s, then), delta=0.01)
+
+    def watch_with_tide(self):
+        sim = Sim(); w = sim.watch
+        class Feed: pass
+        w.tide = Feed(); w.tide.data = {"series": self.tide(sim.t - 3600, hours=60)}
+        w.tide.summary = lambda now=None: {"available": False}
+        return sim, w
+
+    def test_plan_uses_sounder_with_waterline_offset(self):
+        sim, w = self.watch_with_tide()
+        try:
+            sim.put(environment__depth__35__belowTransducer=7.6, environment__depth__35__offset=0.4)
+            sim.run(2, lat=LAT, lon=LON)
+            p = w.depth_plan(sim.t)
+            self.assertTrue(p["available"]); self.assertEqual((p["source"], p["surface"]), ("sounder", True))
+            self.assertAlmostEqual(p["now"], 8.0, delta=0.01)                   # 7.6 below the transducer + 0.4 to the waterline
+            self.assertEqual(p["chain"], math.ceil((p["max"] + 1.2) * 5))
+            w.command({"action": "settings", "settings": {"scope_ratio": 3, "bow_height": 2}})
+            self.assertEqual(w.depth_plan(sim.t)["chain"], math.ceil((p["max"] + 2) * 3))
+        finally: sim.dir.cleanup()
+
+    def test_plan_falls_back_to_last_reading_here_only(self):
+        sim, w = self.watch_with_tide()
+        try:
+            sim.put(environment__depth__35__belowTransducer=7.6, environment__depth__35__offset=0.4)
+            sim.run(2, lat=LAT, lon=LON)
+            del sim.store.values["sensors"]["environment.depth.35.belowTransducer"]   # sounder switched off
+            sim.run(3, lat=LAT, lon=LON)
+            p = w.depth_plan(sim.t); self.assertEqual(p["source"], "last reading"); self.assertTrue(p["available"])
+            w.save(); self.assertIsNotNone(AnchorWatch(sim.store, sim.file).last_depth)      # kept over a restart
+            far = offset(LAT, LON, 90, 400); sim.t += 11; sim.run(2, lat=far[0], lon=far[1])  # 400 m away
+            p = w.depth_plan(sim.t); self.assertFalse(p["available"]); self.assertIn("elsewhere", p["reason"])
+        finally: sim.dir.cleanup()
+
+    def test_negative_offset_is_not_added(self):
+        sim, w = self.watch_with_tide()
+        try:
+            sim.put(environment__depth__35__belowTransducer=7.6, environment__depth__35__offset=-1.5)   # to the keel
+            sim.run(2, lat=LAT, lon=LON)
+            p = w.depth_plan(sim.t); self.assertFalse(p["surface"]); self.assertAlmostEqual(p["now"], 7.6, delta=0.01)
+        finally: sim.dir.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()

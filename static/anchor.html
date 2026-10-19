@@ -114,6 +114,8 @@ button.on{outline:2px solid var(--accent)}
 .tide .spark path{fill:none;stroke:var(--accent);stroke-width:1.6}
 .tide .spark line{stroke:var(--muted);stroke-width:1;stroke-dasharray:2 2}
 .tide .spark circle{fill:var(--accent)}
+.tile .dp{margin-top:6px;padding-top:6px;border-top:1px solid var(--line);font-size:13px;color:var(--text)}
+.tile .dp b{font-weight:600}
 .tile .s{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -238,6 +240,10 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
         <div class="row">
           <label class="f">GPS → bow roller (m)<input type="number" data-s="bow_offset" step="0.5" min="-50" max="50"></label>
           <label class="f">Default radius (m)<input type="number" data-s="default_radius" min="5" max="2000"></label>
+        </div>
+        <div class="row">
+          <label class="f">Bow height above water (m)<input type="number" data-s="bow_height" step="0.1" min="0" max="10"></label>
+          <label class="f">Scope for chain advice (x : 1)<input type="number" data-s="scope_ratio" step="0.5" min="2" max="10"></label>
         </div>
         <div class="row">
           <label class="f">GPS source<select id="gpsSel"></select></label>
@@ -444,6 +450,14 @@ function sunTile(){
 // ---------- tide (server: Open-Meteo marine sea level, hourly, cached on the PC)
 const TIDE_UP='<svg class="ic" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="rising"><path d="M2 17c2.5 0 2.5 2 5 2s2.5-2 5-2 2.5 2 5 2 2.5-2 5-2M12 3v10M8 7l4-4 4 4"/></svg>';
 const TIDE_DOWN='<svg class="ic" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="falling"><path d="M2 17c2.5 0 2.5 2 5 2s2.5-2 5-2 2.5 2 5 2 2.5-2 5-2M12 3v10M8 9l4 4 4-4"/></svg>';
+function depthPlanHtml(){
+  const P=S.depth_plan||{};
+  if(!P.available)return `<div class="dp s">Depth next 24 h: ${esc(P.reason||'–')}</div>`;
+  const ref=P.surface?'':' (below transducer)';
+  const from=P.source==='sounder'?'sounder':`last reading ${dayTime(P.reading_t)}, corrected for the tide`;
+  return `<div class="dp">Depth next 24 h: <b>${f1(P.min)}–${f1(P.max)} m</b>${ref} · low ${hm(new Date(P.min_t*1000))}, high ${hm(new Date(P.max_t*1000))}`
+    +`<br>Chain: <b>${P.chain} m</b> (${+P.scope}:1 on ${f1(P.max)} m + ${f1(P.bow_height)} m bow)</div><div class="s">Depth now ${f1(P.now)} m · from ${esc(from)}</div>`;
+}
 function tideTile(){
   const T=S.tide||{};
   if(!T.available)return `<div class="tile wide"><div class="l">Tide</div><div class="v">–</div><div class="s">${esc(T.error?'no tide data: '+T.error:'no tide data yet')}</div></div>`;
@@ -454,7 +468,7 @@ function tideTile(){
   const nx=T.next.map(e=>`${e.type==='high'?'High':'Low'} ${hm(new Date(e.t*1000))}`).join(' · ');
   const range=T.range!=null?` · range ${Math.round(T.range*100)} cm`:'';
   const label=T.trend==='rising'?'Rising':T.trend==='falling'?'Falling':'–';
-  return `<div class="tile wide" title="Open-Meteo marine model, sea level incl. tide and weather; grid point ${T.grid?T.grid.map(v=>(+v).toFixed(2)).join(', '):''}; not for navigation"><div class="l">Tide</div><div class="v tide">${T.trend==='falling'?TIDE_DOWN:TIDE_UP}<span>${label}</span>${spark}</div><div class="s">${nx}${range}${T.error?' · <span style="color:var(--warn)">offline copy</span>':''} · <a href="https://open-meteo.com/" target="_blank" style="color:inherit">Open-Meteo</a></div></div>`;
+  return `<div class="tile wide" title="Open-Meteo marine model, sea level incl. tide and weather; grid point ${T.grid?T.grid.map(v=>(+v).toFixed(2)).join(', '):''}; not for navigation"><div class="l">Tide</div><div class="v tide">${T.trend==='falling'?TIDE_DOWN:TIDE_UP}<span>${label}</span>${spark}</div>${depthPlanHtml()}<div class="s">${nx}${range}${T.error?' · <span style="color:var(--warn)">offline copy</span>':''} · <a href="https://open-meteo.com/" target="_blank" style="color:inherit">Open-Meteo</a></div></div>`;
 }
 function distBig(){return S.distance!=null?`${f0(S.distance)}<small> m</small>`:''}
 // fixed elements, only their text changes, so a tap on the button is never lost to a re-render

@@ -121,6 +121,12 @@ when the API key is in place), otherwise it alerts after the interval.
   several km; free for non-commercial use with attribution). The PC fetches it every 3 h or when the boat has moved
   5 km, sending only a position rounded to about 1 km, and keeps a 7-day copy in `tide_cache.json` (git-ignored) so it
   also shows offline. Mediterranean tides are small (often 10-20 cm); not for navigation.
+- **Depth next 24 h and chain advice** (in the Tide tile): the lowest and highest depth over the next 24 hours, from
+  the sounder's depth now plus the tide curve, and the chain to let out in whole metres (rounded up):
+  *scope x (highest depth + bow height)*, with *Bow height above water* (default 1.2 m) and *Scope for chain advice*
+  (default 5:1) in Alarm settings. The sounder's transducer-to-waterline offset is added when it reports one. With the
+  sounder switched off, the last reading is used, corrected for the tide since then, but only if it was taken within
+  150 m (or twice the radius) of the boat's position now.
   The rode helper suggests a radius from rode length, depth and bow height.
 - **Track:** the last 24 h (setting *Track kept*) is drawn on the map, older parts fainter. *Start new track* under
   the map deletes the recorded track and the max swing and starts afresh; the anchor watch itself carries on.

@@ -34,7 +34,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -60,10 +60,12 @@ DEFAULTS = {
     "alive_minutes": 60.0,    # still-alive check: alert from outside after this long without a sign of life, 0 = off
     "internet_ais": True,     # add AIS targets from aisstream.io (needs aisstream.json); the local receiver always wins
     "track_hours": 24,
+    "bow_height": 1.2,        # m from the waterline to the bow roller, for the chain advice
+    "scope_ratio": 5.0,       # chain length : (depth + bow height), for the chain advice
 }
 SETTING_LIMITS = {"default_radius": (5, 2000), "confirm_s": (0, 600), "gps_timeout_s": (5, 600), "core_timeout_s": (5, 600),
                   "min_depth": (0, 500), "max_wind_kn": (0, 150), "bow_offset": (-50, 50), "track_hours": (1, 72),
-                  "alive_minutes": (0, 1440)}
+                  "alive_minutes": (0, 1440), "bow_height": (0, 10), "scope_ratio": (2, 10)}
 
 # ---------------------------------------------------------------- geometry (flat earth is fine for < a few km)
 
@@ -127,11 +129,15 @@ def read_boat(sensors, now, sources_pref, frozen=frozenset()):
             var, _ = first([f"navigation.heading.{src}.variation", "navigation.heading.254.variation", "navigation.magvar.254.variation"])
             hdg += var or 0
         hdg = hdg * RAD % 360
-    depth, _ = first([k for k in sensors if k.startswith("environment.depth.") and k.endswith(".belowTransducer")])
+    depth, dk = first([k for k in sensors if k.startswith("environment.depth.") and k.endswith(".belowTransducer")])
+    surface = None
+    if depth is not None:
+        off, _ = val(dk.rsplit(".", 1)[0] + ".offset")
+        surface = depth + off if off is not None and off > 0 else None   # negative offset = to the keel: no waterline
     tws, _ = first(["environment.wind.254.0.speed", "environment.wind.254.3.speed", "environment.wind.2.0.speed", "environment.wind.2.3.speed"])
     twd, _ = first(["environment.wind.254.0.angle", "environment.wind.2.0.angle"])
     sog, _ = first(["navigation.cogsog.254.speed"] + ([f"navigation.cogsog.{pos['source']}.speed"] if pos else []))
-    return {"pos": pos, "heading": hdg, "depth": depth, "tws": tws * KN if tws is not None else None,
+    return {"pos": pos, "heading": hdg, "depth": depth, "depth_surface": surface, "tws": tws * KN if tws is not None else None,
             "twd": twd * RAD % 360 if twd is not None else None, "sog": sog * KN if sog is not None else None}
 
 
@@ -331,6 +337,33 @@ def tide_summary(series, now):
             "next": [{"type": e["type"], "t": round(e["t"]), "h": round(e["h"], 3)} for e in nxt],
             "range": round(abs(span[0] - span[1]), 3) if len(span) == 2 else None,
             "curve": [[t, h] for t, h in series if now - 6 * 3600 <= t <= now + 18 * 3600]}
+
+
+def tide_at(series, t):
+    """Sea level at time t, linear between the hourly points; None outside the series."""
+    if not series or not (series[0][0] <= t <= series[-1][0]): return None
+    for (t0, h0), (t1, h1) in zip(series, series[1:]):
+        if t0 <= t <= t1: return h0 + (h1 - h0) * ((t - t0) / (t1 - t0) if t1 > t0 else 0)
+    return series[-1][1]
+
+
+def depth_window(series, now, depth, depth_t, hours=24):
+    """Depth now and its lowest and highest value over the next `hours`, from one depth reading and the tide.
+
+    depth: a reading at time depth_t (now for a live sounder, earlier for the last reading). The depth at any time t
+    is depth + tide(t) - tide(depth_t). Returns None when the tide series does not cover depth_t and the window.
+    """
+    base = tide_at(series, depth_t); end = now + hours * 3600
+    if base is None or tide_at(series, now) is None or series[-1][0] < end: return None
+    pts = [(now, tide_at(series, now))] + [(t, h) for t, h in series if now < t < end] + [(end, tide_at(series, end))]
+    lo = min(pts, key=lambda p: p[1]); hi = max(pts, key=lambda p: p[1])
+    d = lambda h: round(depth + h - base, 2)
+    return {"now": d(pts[0][1]), "min": d(lo[1]), "min_t": round(lo[0]), "max": d(hi[1]), "max_t": round(hi[0])}
+
+
+def chain_advice(max_depth, bow_height, scope):
+    """Chain to let out, in whole metres (rounded up): scope x (deepest water in the window + bow height)."""
+    return math.ceil((max_depth + bow_height) * scope - 1e-9)
 
 
 class TideFeed:
@@ -622,6 +655,7 @@ class AnchorWatch:
         self.alive = None                  # StillAlive, set by main()
         self.netais = None                 # InternetAIS, set by main()
         self.tide = None                   # TideFeed, set by main()
+        self.last_depth = None             # {"d", "t", "surface"}: last sounder reading, used while the sounder is off
         self.load()
 
     # ---- persistence
@@ -632,13 +666,13 @@ class AnchorWatch:
         self.settings.update({k: v for k, v in d.get("settings", {}).items() if k in DEFAULTS})
         if self.settings["gps_sources"] == "4,127,3": self.settings["gps_sources"] = DEFAULT_GPS   # old default (< 1.2.0)
         self.anchor = d.get("anchor"); self.max_dist = d.get("max_dist", 0.0)
-        self.track = deque(d.get("track", [])); self.events.extend(d.get("events", []))
+        self.track = deque(d.get("track", [])); self.events.extend(d.get("events", [])); self.last_depth = d.get("last_depth")
         if self.anchor: log.info("anchor watch restored: %.6f, %.6f radius %.0f m", self.anchor["lat"], self.anchor["lon"], self.anchor["radius"])
 
     def save(self):
         with self.lock:
             d = {"settings": self.settings, "anchor": self.anchor, "max_dist": self.max_dist,
-                 "track": list(self.track), "events": list(self.events)}
+                 "track": list(self.track), "events": list(self.events), "last_depth": self.last_depth}
             self.dirty = False
         tmp = self.state_file.with_suffix(".tmp")
         tmp.write_text(json.dumps(d, separators=(",", ":")), encoding="utf-8"); os.replace(tmp, self.state_file)
@@ -666,6 +700,11 @@ class AnchorWatch:
                 if src in srcs: self.event(f"GPS {self.source_name(src)} is updating again", now, "ok")
             self.frozen = frozen
             boat = read_boat(sensors, now, prefs, frozen); self.boat = boat; pos = boat["pos"]
+            if boat["depth"] is not None:
+                surf = boat["depth_surface"] is not None
+                if not self.last_depth or now - self.last_depth["t"] >= 60: self.dirty = True       # persisted about once a minute
+                self.last_depth = {"d": boat["depth_surface"] if surf else boat["depth"], "t": now, "surface": surf,
+                                   "lat": pos["lat"] if pos else None, "lon": pos["lon"] if pos else None}
             self.gps_list = [{"source": src, "name": self.source_name(src), "sats": c["sats"], "hdop": c["hdop"],
                               "age": round(c["age"], 1), "frozen": src in frozen, "in_use": bool(pos and pos["source"] == src)}
                              for src, c in sorted(srcs.items(), key=lambda kv: (kv[0] != CORE_SOURCE, int(kv[0])))]
@@ -844,7 +883,27 @@ class AnchorWatch:
                           "ships": len(net) if net is not None else 0}
         out["own_candidate"] = min(near_us, key=lambda t: t["dist"]) if near_us else None
         out["tide"] = self.tide.summary(now) if self.tide is not None else {"available": False}
+        out["depth_plan"] = self.depth_plan(now)
         return out
+
+    def depth_plan(self, now):
+        """Depth now, lowest and highest over the next 24 h and the chain advice, from the sounder (or its last reading)
+        and the tide. {"available": False, "reason": ...} when it cannot be worked out."""
+        s = self.settings; series = (self.tide.data or {}).get("series") if self.tide is not None else None
+        b = self.boat; live = b.get("depth") is not None
+        if live: d, t, surface = (b["depth_surface"], now, True) if b.get("depth_surface") is not None else (b["depth"], now, False)
+        elif self.last_depth:
+            ld, here = self.last_depth, b.get("pos") or self.anchor
+            far = max(150.0, 2 * self.anchor["radius"]) if self.anchor else 150.0
+            if not (here and ld.get("lat") is not None and dist_bearing_m(ld["lat"], ld["lon"], here["lat"], here["lon"])[0] <= far):
+                return {"available": False, "reason": "no depth reading here (sounder off; the last reading was taken elsewhere)"}
+            d, t, surface = ld["d"], ld["t"], ld["surface"]
+        else: return {"available": False, "reason": "no depth reading yet"}
+        if not series: return {"available": False, "reason": "no tide data"}
+        w = depth_window(series, now, d, t)
+        if not w: return {"available": False, "reason": "last depth reading is older than the tide data" if not live else "tide data does not cover the next 24 h"}
+        return {"available": True, **w, "source": "sounder" if live else "last reading", "reading_t": round(t), "surface": surface,
+                "chain": chain_advice(w["max"], s["bow_height"], s["scope_ratio"]), "scope": s["scope_ratio"], "bow_height": s["bow_height"]}
 
     def track_since(self, t, gen):
         with self.lock:
