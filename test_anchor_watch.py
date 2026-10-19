@@ -657,12 +657,15 @@ class DepthPlanTest(unittest.TestCase):
         try:
             sim.put(environment__depth__35__belowTransducer=7.6, environment__depth__35__offset=0.4)
             sim.run(2, lat=LAT, lon=LON)
+            self.assertEqual((w.boat["depth"], w.boat["depth_transducer"], w.boat["depth_offset_src"]), (8.0, 7.6, "sounder"))
             p = w.depth_plan(sim.t)
-            self.assertTrue(p["available"]); self.assertEqual((p["source"], p["surface"]), ("sounder", True))
+            self.assertTrue(p["available"]); self.assertEqual(p["source"], "sounder")
             self.assertAlmostEqual(p["now"], 8.0, delta=0.01)                   # 7.6 below the transducer + 0.4 to the waterline
-            self.assertEqual(p["chain"], math.ceil((p["max"] + 1.2) * 5))
-            w.command({"action": "settings", "settings": {"scope_ratio": 3, "bow_height": 2}})
-            self.assertEqual(w.depth_plan(sim.t)["chain"], math.ceil((p["max"] + 2) * 3))
+            self.assertEqual(p["chain"], math.ceil((p["max"] + 1.2) * 5)); self.assertIsNone(p["clearance_min"])   # no draught set
+            w.command({"action": "settings", "settings": {"scope_ratio": 3, "bow_height": 2, "draught": 2.3}})
+            p2 = w.depth_plan(sim.t)
+            self.assertEqual(p2["chain"], math.ceil((p["max"] + 2) * 3))
+            self.assertAlmostEqual(p2["clearance_min"], p["min"] - 2.3, delta=0.001)   # shallowest water in 24 h minus the keel
         finally: sim.dir.cleanup()
 
     def test_plan_falls_back_to_last_reading_here_only(self):
@@ -678,12 +681,26 @@ class DepthPlanTest(unittest.TestCase):
             p = w.depth_plan(sim.t); self.assertFalse(p["available"]); self.assertIn("elsewhere", p["reason"])
         finally: sim.dir.cleanup()
 
-    def test_negative_offset_is_not_added(self):
+    def test_transducer_setting_when_the_sounder_does_not_report_it(self):
         sim, w = self.watch_with_tide()
         try:
-            sim.put(environment__depth__35__belowTransducer=7.6, environment__depth__35__offset=-1.5)   # to the keel
+            sim.put(environment__depth__35__belowTransducer=7.6, environment__depth__35__offset=-1.5)   # offset to the keel
             sim.run(2, lat=LAT, lon=LON)
-            p = w.depth_plan(sim.t); self.assertFalse(p["surface"]); self.assertAlmostEqual(p["now"], 7.6, delta=0.01)
+            self.assertEqual((w.boat["depth"], w.boat["depth_offset_src"]), (7.6, "setting"))      # setting 0 by default
+            w.command({"action": "settings", "settings": {"transducer_depth": 0.5}}); sim.run(1, lat=LAT, lon=LON)
+            self.assertEqual(w.boat["depth"], 8.1); self.assertAlmostEqual(w.depth_plan(sim.t)["now"], 8.1, delta=0.01)
+        finally: sim.dir.cleanup()
+
+    def test_min_depth_alarm_uses_water_depth(self):
+        sim = Sim(); w = sim.watch
+        try:
+            sim.run(2, lat=LAT, lon=LON); w.command({"action": "drop", "mode": "here", "radius": 30})
+            w.command({"action": "settings", "settings": {"min_depth": 3}})
+            def sounder(bt, seconds):                                              # the Core refreshes the reading
+                for _ in range(seconds):
+                    sim.put(environment__depth__35__belowTransducer=bt, environment__depth__35__offset=0.4); sim.run(1, lat=LAT, lon=LON)
+            sounder(2.7, 12); self.assertNotIn("depth", w.alarms)                # 3.1 m of water: above 3 m
+            sounder(2.5, 12); self.assertIn("depth", w.alarms)                   # 2.9 m of water (2.5 below the transducer)
         finally: sim.dir.cleanup()
 
 

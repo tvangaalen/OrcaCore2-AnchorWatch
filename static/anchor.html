@@ -121,6 +121,14 @@ button.on{outline:2px solid var(--accent)}
 .trow .trend{display:flex;align-items:center;gap:6px;font-size:16px;font-weight:600}
 .trow .trend svg{flex:none;color:var(--accent)}
 .trow .trend small{font-size:13px;font-weight:400;color:var(--muted)}
+.keel{margin:8px 0 2px}
+.keel .kl{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:var(--muted)}
+.keel .kl b{font-size:16px;font-weight:600;color:var(--text)}
+.keel.warn .kl b{color:var(--warn)}.keel.bad .kl b{color:var(--bad)}
+.kbar{display:flex;height:10px;border-radius:5px;overflow:hidden;margin:3px 0;background:var(--line)}
+.kbar .hull{background:var(--muted)}
+.kbar .clear{background:var(--ok)}
+.keel.warn .kbar .clear{background:var(--warn)}.keel.bad .kbar .clear{background:var(--bad)}
 .chip{font-size:13px;font-weight:600;padding:3px 10px;border-radius:8px;white-space:nowrap;
   background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
 .tile .s{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -241,7 +249,7 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
           <label class="f">GPS lost after (s)<input type="number" data-s="gps_timeout_s" min="5" max="600"></label>
         </div>
         <div class="row">
-          <label class="f">Min depth (m, 0 = off)<input type="number" data-s="min_depth" min="0" step="0.1"></label>
+          <label class="f">Min water depth (m, 0 = off)<input type="number" data-s="min_depth" min="0" step="0.1"></label>
           <label class="f">Max wind (kn, 0 = off)<input type="number" data-s="max_wind_kn" min="0"></label>
         </div>
         <div class="row">
@@ -251,6 +259,10 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
         <div class="row">
           <label class="f">Bow height above water (m)<input type="number" data-s="bow_height" step="0.1" min="0" max="10"></label>
           <label class="f">Scope for chain advice (x : 1)<input type="number" data-s="scope_ratio" step="0.5" min="2" max="10"></label>
+        </div>
+        <div class="row">
+          <label class="f">Draught (m, 0 = off)<input type="number" data-s="draught" step="0.05" min="0" max="10"></label>
+          <label class="f" id="tdLabel">Transducer below waterline (m)<input type="number" data-s="transducer_depth" step="0.05" min="0" max="5"></label>
         </div>
         <div class="row">
           <label class="f">GPS source<select id="gpsSel"></select></label>
@@ -386,7 +398,7 @@ function render(){
     a?tile('From anchor',S.distance!=null?f0(S.distance):'–','m',S.bearing!=null?`bearing ${f0(S.bearing)}° ${card(S.bearing)}`:''):'',
     a?tile('Max swing',f0(S.max_dist),'m',`limit ${f0(a.radius)} m`):'',
     tile('Depth',f1(b.depth),'m',b.depth==null&&S.settings.min_depth>0?'<span style="color:var(--warn)">no depth data: depth alarm inactive</span>'
-      :a&&a.depth!=null?`at drop ${f1(a.depth)} m`:'below transducer'),
+      :a&&a.depth!=null?`water depth · at drop ${f1(a.depth)} m`:'water depth'),
     tile('True wind',f0(b.tws),'kn',b.tws==null&&S.settings.max_wind_kn>0?'<span style="color:var(--warn)">no wind data: wind alarm inactive</span>'
       :b.twd!=null?`from ${f0(b.twd)}° ${card(b.twd)}`:''),
     sunTile(), tideTile(),
@@ -414,6 +426,8 @@ function render(){
      +`If the PC stops answering for ${mins} min, the monitor alerts your phone. Pings every ${Math.round((al.every_s||300)/60)} min${al.last_ok?', last '+clock(al.last_ok):''}.`
      +(al.note?` <b>To do:</b> ${esc(al.note)}.`:'');
   renderGps();
+  const td=$('tdLabel').firstChild; const bs=S.boat;
+  td.textContent=bs.depth_offset_src==='sounder'?`Transducer below waterline (m) · sounder reports ${(+bs.depth_offset).toFixed(2)} m`:'Transducer below waterline (m)';
   const na=S.net_ais||{}, nst=$('netAisStatus');
   nst.innerHTML=!na.configured?'Not set up: put your aisstream.io API key in <b>aisstream.json</b> on the watch PC (see aisstream.example.json), then press <b>Reconnect</b>.'
     :!S.settings.internet_ais?'Off.'
@@ -486,8 +500,7 @@ function tideTile(){
   const chart=dp?tideChart(P.curve,S.time,P.now,P):tideChart(T.curve,S.time,T.level,null);
   const label=T.trend==='rising'?'Rising':T.trend==='falling'?'Falling':'–';
   const range=T.range!=null?` · range ${Math.round(T.range*100)} cm`:'';
-  const nx=T.next.map(e=>`${e.type==='high'?'High':'Low'} ${hm(new Date(e.t*1000))}`).join(' · ');
-  const ref=dp&&!P.surface?' (below transducer)':'';
+  const ref='';
   const from=!dp?'':P.source==='sounder'?'from sounder':`from last reading ${dayTime(P.reading_t)}, tide-corrected`;
   const head=dp?`now ${f1(P.now)} m${ref}`:'sea level';
   const chip=dp?`<span class="chip" title="${+P.scope}:1 on ${f1(P.max)} m (deepest in 24 h) + ${f1(P.bow_height)} m bow, rounded up">Chain ${P.chain} m</span>`:'';
@@ -495,7 +508,17 @@ function tideTile(){
   return `<div class="tile wide" title="Open-Meteo marine model, sea level incl. tide and weather; grid point ${T.grid?T.grid.map(v=>(+v).toFixed(2)).join(', '):''}; not for navigation">`
     +`<div class="thead"><span class="l">Tide${dp?' · depth next 24 h':''}</span><b>${head}</b></div>${chart}`
     +`<div class="trow"><span class="trend">${T.trend==='falling'?TIDE_DOWN:TIDE_UP}${label}<small>${range}</small></span>${chip}</div>${why}`
-    +`<div class="s">${nx}${from?' · '+esc(from):''}${T.error?' · <span style="color:var(--warn)">offline copy</span>':''} · <a href="https://open-meteo.com/" target="_blank" style="color:inherit">Open-Meteo</a></div></div>`;
+    +`${dp?keelBar(P):''}<div class="s">${from?esc(from)+' · ':''}${T.error?' · <span style="color:var(--warn)">offline copy</span>':''}<a href="https://open-meteo.com/" target="_blank" style="color:inherit">Open-Meteo</a></div></div>`;
+}
+// clearance under the keel at the shallowest moment of the next 24 h: draught and clearance as one bar, scaled to the depth
+function keelBar(P){
+  if(!P.draught)return '';
+  const cl=P.clearance_min, tot=Math.max(P.min,P.draught), kp=Math.min(100,P.draught/tot*100);
+  const cls=cl<0.5?'bad':cl<1?'warn':'ok';
+  return `<div class="keel ${cls}" title="Shallowest water in the next 24 h (${f1(P.min)} m at ${hm(new Date(P.min_t*1000))}) minus the draught (${P.draught.toFixed(2)} m)">`
+    +`<div class="kl"><span>Under keel, min next 24 h</span><b>${cl.toFixed(1)} m</b></div>`
+    +`<div class="kbar"><i class="hull" style="width:${kp.toFixed(1)}%"></i><i class="clear" style="width:${(100-kp).toFixed(1)}%"></i></div>`
+    +`<div class="kl s"><span>draught ${P.draught.toFixed(2)} m</span><span>water ${f1(P.min)} m at ${hm(new Date(P.min_t*1000))}</span></div></div>`;
 }
 function distBig(){return S.distance!=null?`${f0(S.distance)}<small> m</small>`:''}
 // fixed elements, only their text changes, so a tap on the button is never lost to a re-render

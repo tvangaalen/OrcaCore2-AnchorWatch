@@ -34,7 +34,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.7.1"
+VERSION = "1.8.0"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -50,7 +50,7 @@ DEFAULTS = {
     "confirm_s": 10,          # boat must stay outside the circle this long before the drag alarm
     "gps_timeout_s": 30,      # no usable position for this long -> GPS alarm
     "core_timeout_s": 30,     # sensor stream down for this long -> Core alarm
-    "min_depth": 0.0,         # m below transducer, 0 = off
+    "min_depth": 0.0,         # m water depth, 0 = off
     "max_wind_kn": 0.0,       # true wind speed, 0 = off
     "bow_offset": 0.0,        # m from GPS antenna forward to the bow roller
     "gps_sources": DEFAULT_GPS,  # GNSS sources in order of preference; 254 = the Orca Core's own GPS
@@ -62,10 +62,13 @@ DEFAULTS = {
     "track_hours": 24,
     "bow_height": 1.2,        # m from the waterline to the bow roller, for the chain advice
     "scope_ratio": 5.0,       # chain length : (depth + bow height), for the chain advice
+    "draught": 0.0,           # m, keel below the waterline; 0 = off. Shows the clearance under the keel
+    "transducer_depth": 0.0,  # m, transducer below the waterline, used when the sounder does not report it
 }
 SETTING_LIMITS = {"default_radius": (5, 2000), "confirm_s": (0, 600), "gps_timeout_s": (5, 600), "core_timeout_s": (5, 600),
                   "min_depth": (0, 500), "max_wind_kn": (0, 150), "bow_offset": (-50, 50), "track_hours": (1, 72),
-                  "alive_minutes": (0, 1440), "bow_height": (0, 10), "scope_ratio": (2, 10)}
+                  "alive_minutes": (0, 1440), "bow_height": (0, 10), "scope_ratio": (2, 10),
+                  "draught": (0, 10), "transducer_depth": (0, 5)}
 
 # ---------------------------------------------------------------- geometry (flat earth is fine for < a few km)
 
@@ -106,7 +109,7 @@ def position_sources(sensors, now):
     return out
 
 
-def read_boat(sensors, now, sources_pref, frozen=frozenset()):
+def read_boat(sensors, now, sources_pref, frozen=frozenset(), transducer_depth=0.0):
     """Pick the position and the other values the watch needs from the Store's sensor map (key -> (value, t)).
     Sources in `frozen` (position unchanged for FROZEN_S) are skipped."""
     def val(k):
@@ -130,14 +133,18 @@ def read_boat(sensors, now, sources_pref, frozen=frozenset()):
             hdg += var or 0
         hdg = hdg * RAD % 360
     depth, dk = first([k for k in sensors if k.startswith("environment.depth.") and k.endswith(".belowTransducer")])
-    surface = None
+    raw, water, off_src = depth, None, None
     if depth is not None:
+        # water depth = reading + transducer depth below the waterline: the sounder's own offset when it reports a
+        # positive one (N2K: positive = transducer to waterline, negative = to the keel), else the setting
         off, _ = val(dk.rsplit(".", 1)[0] + ".offset")
-        surface = depth + off if off is not None and off > 0 else None   # negative offset = to the keel: no waterline
+        if off is not None and off > 0: water, off_src = depth + off, "sounder"
+        else: water, off, off_src = depth + transducer_depth, transducer_depth, "setting"
     tws, _ = first(["environment.wind.254.0.speed", "environment.wind.254.3.speed", "environment.wind.2.0.speed", "environment.wind.2.3.speed"])
     twd, _ = first(["environment.wind.254.0.angle", "environment.wind.2.0.angle"])
     sog, _ = first(["navigation.cogsog.254.speed"] + ([f"navigation.cogsog.{pos['source']}.speed"] if pos else []))
-    return {"pos": pos, "heading": hdg, "depth": depth, "depth_surface": surface, "tws": tws * KN if tws is not None else None,
+    return {"pos": pos, "heading": hdg, "depth": round(water, 2) if water is not None else None, "depth_transducer": raw,
+            "depth_offset": off if raw is not None else None, "depth_offset_src": off_src, "tws": tws * KN if tws is not None else None,
             "twd": twd * RAD % 360 if twd is not None else None, "sog": sog * KN if sog is not None else None}
 
 
@@ -645,7 +652,7 @@ class AnchorWatch:
         self.pending = {}                  # id -> time the condition started
         self.silenced_until = 0
         self.max_dist = 0.0
-        self.boat = {"pos": None, "heading": None, "depth": None, "tws": None, "twd": None, "sog": None}
+        self.boat = {"pos": None, "heading": None, "depth": None, "depth_transducer": None, "tws": None, "twd": None, "sog": None}
         self.last_pos_t = None
         self.last_source = None
         self.pos_seen = {}                 # source -> (lat, lon, time the value last changed)
@@ -702,12 +709,10 @@ class AnchorWatch:
             for src in self.frozen - frozen:
                 if src in srcs: self.event(f"GPS {self.source_name(src)} is updating again", now, "ok")
             self.frozen = frozen
-            boat = read_boat(sensors, now, prefs, frozen); self.boat = boat; pos = boat["pos"]
+            boat = read_boat(sensors, now, prefs, frozen, float(s["transducer_depth"])); self.boat = boat; pos = boat["pos"]
             if boat["depth"] is not None:
-                surf = boat["depth_surface"] is not None
                 if not self.last_depth or now - self.last_depth["t"] >= 60: self.dirty = True       # persisted about once a minute
-                self.last_depth = {"d": boat["depth_surface"] if surf else boat["depth"], "t": now, "surface": surf,
-                                   "lat": pos["lat"] if pos else None, "lon": pos["lon"] if pos else None}
+                self.last_depth = {"d": boat["depth"], "t": now, "lat": pos["lat"] if pos else None, "lon": pos["lon"] if pos else None}
             self.gps_list = [{"source": src, "name": self.source_name(src), "sats": c["sats"], "hdop": c["hdop"],
                               "age": round(c["age"], 1), "frozen": src in frozen, "in_use": bool(pos and pos["source"] == src)}
                              for src, c in sorted(srcs.items(), key=lambda kv: (kv[0] != CORE_SOURCE, int(kv[0])))]
@@ -894,19 +899,21 @@ class AnchorWatch:
         and the tide. {"available": False, "reason": ...} when it cannot be worked out."""
         s = self.settings; series = (self.tide.data or {}).get("series") if self.tide is not None else None
         b = self.boat; live = b.get("depth") is not None
-        if live: d, t, surface = (b["depth_surface"], now, True) if b.get("depth_surface") is not None else (b["depth"], now, False)
+        if live: d, t = b["depth"], now
         elif self.last_depth:
             ld, here = self.last_depth, b.get("pos") or self.anchor
             far = max(150.0, 2 * self.anchor["radius"]) if self.anchor else 150.0
             if not (here and ld.get("lat") is not None and dist_bearing_m(ld["lat"], ld["lon"], here["lat"], here["lon"])[0] <= far):
                 return {"available": False, "reason": "no depth reading here (sounder off; the last reading was taken elsewhere)"}
-            d, t, surface = ld["d"], ld["t"], ld["surface"]
+            d, t = ld["d"], ld["t"]
         else: return {"available": False, "reason": "no depth reading yet"}
         if not series: return {"available": False, "reason": "no tide data"}
         w = depth_window(series, now, d, t)
         if not w: return {"available": False, "reason": "last depth reading is older than the tide data" if not live else "tide data does not cover the next 24 h"}
-        return {"available": True, **w, "source": "sounder" if live else "last reading", "reading_t": round(t), "surface": surface,
-                "chain": chain_advice(w["max"], s["bow_height"], s["scope_ratio"]), "scope": s["scope_ratio"], "bow_height": s["bow_height"]}
+        dr = float(s["draught"])
+        return {"available": True, **w, "source": "sounder" if live else "last reading", "reading_t": round(t),
+                "chain": chain_advice(w["max"], s["bow_height"], s["scope_ratio"]), "scope": s["scope_ratio"], "bow_height": s["bow_height"],
+                "draught": dr or None, "clearance_min": round(w["min"] - dr, 2) if dr else None}
 
     def track_since(self, t, gen):
         with self.lock:

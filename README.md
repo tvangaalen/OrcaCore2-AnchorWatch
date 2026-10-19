@@ -124,9 +124,13 @@ when the API key is in place), otherwise it alerts after the interval.
 - **Depth next 24 h and chain advice** (in the Tide tile): the lowest and highest depth over the next 24 hours, from
   the sounder's depth now plus the tide curve, and the chain to let out in whole metres (rounded up):
   *scope x (highest depth + bow height)*, with *Bow height above water* (default 1.2 m) and *Scope for chain advice*
-  (default 5:1) in Alarm settings. The sounder's transducer-to-waterline offset is added when it reports one. With the
-  sounder switched off, the last reading is used, corrected for the tide since then, but only if it was taken within
-  150 m (or twice the radius) of the boat's position now.
+  (default 5:1) in Alarm settings. With the sounder switched off, the last reading is used, corrected for the tide
+  since then, but only if it was taken within 150 m (or twice the radius) of the boat's position now.
+- **Water depth everywhere:** every depth in the app (Depth tile, depth alarm, depth at drop, chain advice, Tide tile)
+  is below the waterline: the sounder's reading plus the transducer depth, which the sounder reports itself when it
+  can (N2K offset), otherwise the *Transducer below waterline* setting.
+- **Under the keel:** with *Draught* set (0 = off), the Tide tile shows the least water under the keel in the next
+  24 h as a bar (draught + clearance), amber below 1 m and red below 0.5 m.
   The rode helper suggests a radius from rode length, depth and bow height.
 - **Track:** the last 24 h (setting *Track kept*) is drawn on the map, older parts fainter. *Start new track* under
   the map deletes the recorded track and the max swing and starts afresh; the anchor watch itself carries on.
