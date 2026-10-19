@@ -6,6 +6,13 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ## 1.7 — Depth and chain advice
 
+### 1.7.1
+- **New Tide tile layout**: a chart of the depth from 6 h back to 24 h ahead (sounder depth now plus the tide curve,
+  `depth_window`'s new `curve`), with the lowest and highest depth of the next 24 h as dashed lines and values, their
+  times as markers, and "now" as a dotted line with a dot. Below it the tide icon with Rising/Falling and the range,
+  and the chain advice as a label (its formula in the tooltip). Without a depth reading the chart shows the sea level
+  and says why there is no depth.
+
 ### 1.7.0
 - **Depth over the next 24 h** in the Tide tile: lowest and highest depth with their times, from the depth now and the
   tide curve (`depth_window`). The depth is below the waterline when the sounder reports a positive transducer offset

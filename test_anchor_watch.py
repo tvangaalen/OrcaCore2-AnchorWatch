@@ -635,6 +635,9 @@ class DepthPlanTest(unittest.TestCase):
         self.assertEqual(chain_advice(w["max"], 1.2, 5), math.ceil((w["max"] + 1.2) * 5))
         self.assertEqual(chain_advice(8.0, 1.2, 5), 46); self.assertEqual(chain_advice(8.01, 1.2, 5), 47)   # whole metres, up
         self.assertIsNone(depth_window(s, s[-1][0] - 3600, 8.0, s[-1][0] - 3600))   # 24 h not covered
+        c = w["curve"]                                           # for the chart: 6 h back to 24 h ahead, in depth
+        self.assertEqual((c[0][0], c[-1][0]), (now - 6 * 3600, now + 24 * 3600))
+        self.assertIn([now, 8.0], c); self.assertEqual(min(v for t, v in c if t >= now), w["min"])
 
     def test_last_reading_is_corrected_for_the_tide(self):
         from anchor_watch import depth_window, tide_at

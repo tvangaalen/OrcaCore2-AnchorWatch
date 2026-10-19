@@ -34,7 +34,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -347,18 +347,21 @@ def tide_at(series, t):
     return series[-1][1]
 
 
-def depth_window(series, now, depth, depth_t, hours=24):
+def depth_window(series, now, depth, depth_t, hours=24, back=6):
     """Depth now and its lowest and highest value over the next `hours`, from one depth reading and the tide.
 
     depth: a reading at time depth_t (now for a live sounder, earlier for the last reading). The depth at any time t
     is depth + tide(t) - tide(depth_t). Returns None when the tide series does not cover depth_t and the window.
+    "curve" is that depth from `back` hours ago (as far as the series goes) to the end of the window, for the chart.
     """
     base = tide_at(series, depth_t); end = now + hours * 3600
     if base is None or tide_at(series, now) is None or series[-1][0] < end: return None
     pts = [(now, tide_at(series, now))] + [(t, h) for t, h in series if now < t < end] + [(end, tide_at(series, end))]
     lo = min(pts, key=lambda p: p[1]); hi = max(pts, key=lambda p: p[1])
     d = lambda h: round(depth + h - base, 2)
-    return {"now": d(pts[0][1]), "min": d(lo[1]), "min_t": round(lo[0]), "max": d(hi[1]), "max_t": round(hi[0])}
+    start = max(series[0][0], now - back * 3600)
+    curve = [[t, d(h)] for t, h in series if start <= t < now] + [[round(t), d(h)] for t, h in pts]
+    return {"now": d(pts[0][1]), "min": d(lo[1]), "min_t": round(lo[0]), "max": d(hi[1]), "max_t": round(hi[0]), "curve": curve}
 
 
 def chain_advice(max_depth, bow_height, scope):
