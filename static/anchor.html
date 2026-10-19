@@ -38,6 +38,9 @@ h1 .logo{flex:none;border-radius:7px}
 .setgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;align-items:start}
 .setgrid h3{margin:0 0 10px;font-size:15px}
 .setgrid .logsec{grid-column:1/-1}
+.credits ul{margin:0;padding-left:18px;font-size:13px;line-height:1.7}
+.credits a{color:var(--accent)}
+.mapinfo{position:absolute;right:10px;bottom:10px;z-index:500;width:26px;height:26px;min-height:26px;padding:0;border-radius:50%;font:600 14px/1 Georgia,serif;opacity:.9}
 .trackbar{display:flex;align-items:center;gap:10px;margin-top:8px;font-size:13px;color:var(--muted)}
 .trackbar span{flex:1;min-width:0}
 .suggest{font-size:13px;color:var(--muted);margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -204,6 +207,7 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
             <span class="grow"></span><button id="moveSave" class="save">Save</button><button id="moveCancel">Cancel</button>
           </div>
         </div>
+        <button class="mapinfo" id="mapInfo" title="Map credits" aria-label="Map credits">i</button>
         <div class="mapctl">
           <button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">−</button><button id="zfit" title="Fit circle and boat">⤢</button>
         </div>
@@ -334,13 +338,24 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
             <button class="small" id="netAisCheck">Reconnect</button>
           </div>
           <div class="note" id="netAisStatus" style="margin-top:4px"></div>
-        <details><summary>More</summary>
-          <div class="row">
-            <label class="f">GPS sources, in order (advanced)<input type="text" data-s="gps_sources"></label>
-            <label class="f">Track kept (h)<input type="number" data-s="track_hours" min="1" max="72"></label>
-          </div>
-          <p class="note">Sources are tried in this order, the next one takes over when a GPS stops. 254 is the Orca Core's own GPS. A GPS whose position has not changed at all for 60 s counts as frozen and is skipped.</p>
-        </details>
+        <div class="row">
+          <label class="f">GPS sources, in order (advanced)<input type="text" data-s="gps_sources"></label>
+          <label class="f">Track kept (h)<input type="number" data-s="track_hours" min="1" max="72"></label>
+        </div>
+        <p class="note">Sources are tried in this order, the next one takes over when a GPS stops. 254 is the Orca Core's own GPS. A GPS whose position has not changed at all for 60 s counts as frozen and is skipped.</p>
+    </section>
+    <section class="card credits" id="credits">
+      <h3>Credits</h3>
+      <ul>
+        <li>Street map: © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors (ODbL)</li>
+        <li>Sea chart: © <a href="https://ideihm.covam.es/portal/licencias/" target="_blank">Instituto Hidrográfico de la Marina</a> (non-commercial use)</li>
+        <li>Satellite imagery: © Esri, Maxar, Earthstar Geographics and the GIS User Community (<a href="https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9" target="_blank">Esri World Imagery</a>)</li>
+        <li>Seamarks: © <a href="https://www.openseamap.org" target="_blank">OpenSeaMap</a> contributors (CC BY-SA)</li>
+        <li>Tide: <a href="https://open-meteo.com/" target="_blank">Weather data by Open-Meteo.com</a> (CC BY 4.0)</li>
+        <li>Internet AIS: <a href="https://aisstream.io" target="_blank">aisstream.io</a></li>
+        <li>Map library: <a href="https://leafletjs.com" target="_blank">Leaflet</a> © Vladimir Agafonkin (BSD-2-Clause)</li>
+      </ul>
+      <p class="note">Charts, tide and AIS are not for navigation.</p>
     </section>
     <section class="logsec">
       <h3>Log</h3>
@@ -548,10 +563,10 @@ function tideTile(){
   const head=dp?`now ${f2(P.now)} m${ref}`:'sea level';
   const chip=dp?`<span class="chip" title="${esc(P.formula)} with D ${f2(P.max)} m (deepest in 24 h), B ${f2(P.bow_height)} m, LOA ${f2(P.loa)} m, rounded up">Recommended chain ${P.chain} m</span>`:'';
   const why=dp?'':`<div class="s" style="color:var(--warn)">No depth for the chart: ${esc(P.reason||'no depth reading')}</div>`;
-  return `<div class="tile full" title="Open-Meteo marine model, sea level incl. tide and weather; grid point ${T.grid?T.grid.map(v=>(+v).toFixed(2)).join(', '):''}; not for navigation">`
+  return `<div class="tile full" title="Marine model sea level incl. tide and weather; grid point ${T.grid?T.grid.map(v=>(+v).toFixed(2)).join(', '):''}; not for navigation">`
     +`<div class="thead"><span class="l">Tide${dp?' · depth next 24 h':''}</span><b>${head}</b></div>${chart}`
     +`<div class="trow"><span class="trend">${T.trend==='falling'?TIDE_DOWN:TIDE_UP}${label}<small>${range}</small></span>${chip}</div>${why}`
-    +`${dp?`<div class="s" style="text-align:right">${esc(P.formula)} · D ${f2(P.max)} · B ${f2(P.bow_height)} · LOA ${f2(P.loa)}</div>`:''}${dp?keelBar(P):''}<div class="s">${from?esc(from)+' · ':''}${T.error?' · <span style="color:var(--warn)">offline copy</span>':''}<a href="https://open-meteo.com/" target="_blank" style="color:inherit">Open-Meteo</a></div></div>`;
+    +`${dp?`<div class="s" style="text-align:right">${esc(P.formula)} · D ${f2(P.max)} · B ${f2(P.bow_height)} · LOA ${f2(P.loa)}</div>`:''}${dp?keelBar(P):''}<div class="s">${from?esc(from)+' · ':''}${T.error?'<span style="color:var(--warn)">offline copy</span>':''}</div></div>`;
 }
 // clearance under the keel at the shallowest moment of the next 24 h: draught and clearance as one bar, scaled to the depth
 function keelBar(P){
@@ -600,8 +615,7 @@ const ihm=tl('ihm','png',16,'Sea chart © <a href="https://ideihm.covam.es/porta
 const bases={sea:L.layerGroup([street,ihm]),street:L.layerGroup([street]),satellite:tl('satellite','jpg',19,'Imagery © Esri, Maxar, Earthstar Geographics'),plain:L.layerGroup()};
 const seamarks=tl('seamark','png',18,'Seamarks © <a href="https://www.openseamap.org" target="_blank">OpenSeaMap</a>');
 seamarks.setZIndex(3);
-const map=L.map('map',{zoomControl:false,preferCanvas:true,zoomSnap:1,maxZoom:21}).setView([39,1.5],9);
-map.attributionControl.setPrefix('<a href="https://leafletjs.com" target="_blank">Leaflet</a> · not for navigation');
+const map=L.map('map',{zoomControl:false,attributionControl:false,preferCanvas:true,zoomSnap:1,maxZoom:21}).setView([39,1.5],9);
 L.control.scale({imperial:false,position:'bottomleft'}).addTo(map);
 let base='street';   // every start of the page shows the street map; a change only lasts while the page is open
 function setBase(b){map.removeLayer(bases[base]);base=b;bases[b].addTo(map);if(bases[b].bringToBack)bases[b].bringToBack();
@@ -766,13 +780,14 @@ $('saveSettings').onclick=async()=>{
 };
 // ---------- screens: the anchor watch, or the settings (#settings, so the phone's back button works)
 function showView(){
-  const s=location.hash==='#settings';
+  const s=location.hash==='#settings'||location.hash==='#credits';
   $('mainView').hidden=s;$('settingsView').hidden=!s;$('gearBtn').classList.toggle('on',s);
   if(!s)setTimeout(()=>map.invalidateSize(),0);
-  window.scrollTo(0,0);
+  if(location.hash==='#credits')setTimeout(()=>$('credits').scrollIntoView({block:'start'}),0);else window.scrollTo(0,0);
 }
-$('gearBtn').onclick=()=>{location.hash=location.hash==='#settings'?'':'settings'};
+$('gearBtn').onclick=()=>{location.hash=$('settingsView').hidden?'settings':''};
 $('setBack').onclick=()=>{location.hash=''};
+$('mapInfo').onclick=()=>{location.hash='credits'};
 window.addEventListener('hashchange',showView);showView();
 applyTheme();updSound();poll();
 </script>

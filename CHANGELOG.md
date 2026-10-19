@@ -6,6 +6,17 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ## 1.10 — Settings screen
 
+### 1.10.1
+- **The log no longer fills up with unchanged settings.** *Save settings* sends every field; each save re-synced the
+  still-alive period on healthchecks.io and logged "Still-alive check on healthchecks.io set to 30 min" plus
+  "Settings changed" even when nothing changed. Now only real changes are applied and logged, with old and new value
+  (e.g. "Settings changed: draught 2.3 → 2.4"); the period is re-synced only when it changed, and healthchecks.io is
+  logged only when its period actually changes (not after every start). A save with one invalid field applies nothing.
+- **Credits** section in Settings with every required attribution (OpenStreetMap, IHM, Esri, OpenSeaMap, Open-Meteo,
+  aisstream.io, Leaflet), and only there: the map's attribution line and the Tide tile's source link are gone. An (i)
+  button in the map's corner opens the credits, which the OpenStreetMap attribution guidelines allow for maps.
+- The *More* fold in Other settings is gone; GPS sources and track length are shown directly.
+
 ### 1.10.0
 - **Separate Settings screen** behind a gear at the top right, in the sections *Alarms* (drag confirm, GPS lost, min
   water depth, max wind, min AIS distance, PC beep, phone alerts and still-alive check), *Boat details* (My MMSI, LOA,

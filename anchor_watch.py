@@ -34,7 +34,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.10.0"
+VERSION = "1.10.1"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -633,6 +633,7 @@ class StillAlive:
         self.cfg_file, self.interval = Path(cfg_file), interval_minutes        # interval: callable -> minutes (0 = off)
         self.on_event = on_event or (lambda text, kind: None)
         self.cfg = None; self.last_ok = self.last_error = None; self.synced = None; self.sync_note = None
+        self.reported = None              # the period last set on healthchecks.io, for logging changes only
         self.next_ping = 0.0; self.next_sync_try = 0.0; self.failing = False
         self.wake = threading.Event()
         self.reload()
@@ -676,7 +677,9 @@ class StillAlive:
         if minutes: self._request(f"{self.HC_API}/{m[1]}", json.dumps({"timeout": int(minutes * 60), "grace": self.GRACE_S}).encode(), hdr)
         else: self._request(f"{self.HC_API}/{m[1]}/pause", b"", hdr)
         self.synced = minutes; self.sync_note = None
-        self.on_event(f"Still-alive check on healthchecks.io " + (f"set to {minutes:g} min" if minutes else "paused"), "info")
+        if self.reported is not None and minutes != self.reported:
+            self.on_event(f"Still-alive check on healthchecks.io " + (f"set to {minutes:g} min" if minutes else "paused"), "info")
+        self.reported = minutes
 
     def step(self, now=None):
         """One round of the worker: sync the period if needed, ping when due. Tests call it directly."""
@@ -898,6 +901,7 @@ class AnchorWatch:
                     self.silenced_until = now + mins * 60; self.event(f"Alarm silenced for {mins:g} min", now)
                     self._push_cancel()                      # someone is on it: stop the repeating phone alert
             elif act == "settings":
+                new = {}
                 for k, v in (c.get("settings") or {}).items():
                     if k not in DEFAULTS: continue
                     if isinstance(DEFAULTS[k], bool): v = bool(v)
@@ -913,9 +917,13 @@ class AnchorWatch:
                     else:
                         lo, hi = SETTING_LIMITS[k]; v = float(v)
                         if not (math.isfinite(v) and lo <= v <= hi): raise ValueError(f"{k} must be between {lo} and {hi}")
-                    self.settings[k] = v
-                self.event("Settings changed", now)
-                if self.alive is not None and "alive_minutes" in (c.get("settings") or {}): self.alive.poke()
+                    new[k] = v
+                # the page sends every field on Save: only real changes are applied, logged and acted on
+                changed = {k: v for k, v in new.items() if v != self.settings[k]}
+                if changed:
+                    self.event("Settings changed: " + ", ".join(f"{k} {self.settings[k]!r} → {v!r}".replace("'", "") for k, v in changed.items()), now)
+                    self.settings.update(changed)
+                    if self.alive is not None and "alive_minutes" in changed: self.alive.poke()
             elif act in ("push_alarm_test", "push_alarm_stop"):
                 if self.notifier is None: raise ValueError("Push alerts are not available")
                 err = self.notifier.reload()

@@ -779,5 +779,43 @@ class AisAlarmTest(unittest.TestCase):
         finally: s.dir.cleanup()
 
 
+class SettingsLogTest(unittest.TestCase):
+    def test_save_without_changes_logs_nothing_and_does_not_resync(self):
+        s = Sim(); w = s.watch
+        try:
+            class Alive:
+                pokes = 0
+                def poke(self, ping_now=False): Alive.pokes += 1
+            w.alive = Alive()
+            n = len(w.events)
+            w.command({"action": "settings", "settings": dict(w.settings)})          # what Save sends: every field
+            self.assertEqual(len(w.events), n); self.assertEqual(Alive.pokes, 0)
+            w.command({"action": "settings", "settings": {**w.settings, "draught": 2.4, "alive_minutes": 30}})
+            self.assertEqual(Alive.pokes, 1)
+            self.assertIn("draught 0.0 → 2.4", w.events[-1]["text"]); self.assertIn("alive_minutes 60.0 → 30.0", w.events[-1]["text"])
+        finally: s.dir.cleanup()
+
+    def test_one_bad_field_applies_nothing(self):
+        s = Sim(); w = s.watch
+        try:
+            with self.assertRaises(ValueError): w.command({"action": "settings", "settings": {"draught": 2.4, "confirm_s": -5}})
+            self.assertEqual(w.settings["draught"], 0.0)
+        finally: s.dir.cleanup()
+
+    def test_still_alive_logs_only_real_period_changes(self):
+        from anchor_watch import StillAlive
+        d = tempfile.TemporaryDirectory(); f = Path(d.name, "a.json")
+        try:
+            f.write_text(json.dumps({"ping_url": "https://hc-ping.com/0f9a3c2e-1b2d-4e5f-8a9b-0c1d2e3f4a5b", "api_key": "k" * 32}), encoding="utf-8")
+            minutes = [30.0]; events = []
+            a = StillAlive(f, lambda: minutes[0], on_event=lambda t, k: events.append(t), start=False)
+            a._request = lambda url, data=None, headers=None: (200, b"OK")
+            a.step(1000); a.poke(); a.step(1010); a.poke(); a.step(1020)                 # start-up sync and two re-syncs at 30
+            self.assertEqual(events, [])
+            minutes[0] = 45; a.poke(); a.step(1030)
+            self.assertEqual(events, ["Still-alive check on healthchecks.io set to 45 min"])
+        finally: d.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()

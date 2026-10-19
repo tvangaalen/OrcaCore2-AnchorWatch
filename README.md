@@ -105,7 +105,9 @@ when the API key is in place), otherwise it alerts after the interval.
 ### What it does
 
 - **Two screens:** the anchor watch (alarm banner, map, tiles, drop/watch controls) and **Settings** behind the gear
-  at the top right, in three sections — *Alarms*, *Boat details*, *Other settings* — with the log at the bottom. The
+  at the top right, in the sections *Alarms*, *Boat details*, *Other settings* and *Credits* (all required
+  attributions, and only there), with the log at the bottom. The (i) button in the map's corner opens the credits; the
+  map itself carries no attribution line. The
   alarm banner stays visible on both. `#settings` in the address opens the settings directly, and the phone's back
   button returns to the watch.
 - **Position** tile: the GPS position in the format chosen under *Other settings → Position format*: degrees and
