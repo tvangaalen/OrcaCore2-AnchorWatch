@@ -34,7 +34,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.9.0"
+VERSION = "1.10.0"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -65,6 +65,7 @@ DEFAULTS = {
     "chain_formula": "5*(D+B)",  # recommended chain; D = max depth next 24 h, B = bow height, LOA (see ChainFormula)
     "loa": 0.0,               # m, length over all, for chain formulas that use LOA
     "min_ais_dist": 0.0,      # m, alarm when an AIS target comes closer than this while anchored, 0 = off
+    "pos_format": "dmm",      # position tile: "dmm" degrees + decimal minutes, "dms" degrees/minutes/seconds, "dd" decimal
     "draught": 0.0,           # m, keel below the waterline; 0 = off. Shows the clearance under the keel
     "transducer_depth": 0.0,  # m, transducer below the waterline, used when the sounder does not report it
 }
@@ -900,6 +901,9 @@ class AnchorWatch:
                 for k, v in (c.get("settings") or {}).items():
                     if k not in DEFAULTS: continue
                     if isinstance(DEFAULTS[k], bool): v = bool(v)
+                    elif k == "pos_format":
+                        v = str(v).strip()
+                        if v not in ("dmm", "dms", "dd"): raise ValueError("Position format must be dmm, dms or dd")
                     elif k == "chain_formula":
                         v = ChainFormula(v).text                             # raises ValueError with a clear message
                     elif k == "own_mmsi":

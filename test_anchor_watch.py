@@ -719,6 +719,14 @@ class ChainFormulaTest(unittest.TestCase):
         for bad in ("", "3*", "(D+B", "D+B)", "3**D", "__import__('os')", "D/0", "X"):
             with self.assertRaises(ValueError, msg=bad): ChainFormula(bad)
 
+    def test_position_format_setting(self):
+        s = Sim(); w = s.watch
+        try:
+            self.assertEqual(w.settings["pos_format"], "dmm")
+            w.command({"action": "settings", "settings": {"pos_format": "dms"}}); self.assertEqual(w.settings["pos_format"], "dms")
+            with self.assertRaises(ValueError): w.command({"action": "settings", "settings": {"pos_format": "utm"}})
+        finally: s.dir.cleanup()
+
     def test_setting_and_old_scope_migration(self):
         s = Sim(); w = s.watch
         try:

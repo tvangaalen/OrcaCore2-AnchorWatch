@@ -26,6 +26,18 @@ header{display:flex;gap:8px;align-items:center;padding:10px 16px;padding-top:max
 h1{font-size:17px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:8px}
 h1 .logo{flex:none;border-radius:7px}
 :root[data-theme="night"] h1 .logo{filter:grayscale(1) brightness(.55) sepia(1) hue-rotate(-50deg) saturate(6)}
+[hidden]{display:none!important}
+.alerts{max-width:1200px;margin:0 auto;padding:12px 16px 0}
+.alerts .banner+.soundoff{margin-top:10px}
+#mainView{padding-top:0}
+@media (max-width:420px){.conn .lbl{display:none}}   /* phone: the dot alone, so the title fits next to the gear */
+.hbtn.gear{display:inline-flex;align-items:center;justify-content:center;padding:6px 8px}
+.hbtn.gear.on{outline:2px solid var(--accent)}
+.setbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:57px;z-index:4;background:var(--bg);padding:8px 0}
+.settitle{margin:0;font-size:18px;color:var(--text);text-transform:none;letter-spacing:0}
+.setgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;align-items:start}
+.setgrid h3{margin:0 0 10px;font-size:15px}
+.setgrid .logsec{grid-column:1/-1}
 .trackbar{display:flex;align-items:center;gap:10px;margin-top:8px;font-size:13px;color:var(--muted)}
 .trackbar span{flex:1;min-width:0}
 .suggest{font-size:13px;color:var(--muted);margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -93,7 +105,6 @@ button.on{outline:2px solid var(--accent)}
 :root[data-theme="night"] .tl-satellite,:root[data-theme="night"] .tl-seamark{filter:grayscale(1) brightness(.4) sepia(1) hue-rotate(-50deg) saturate(6)}
 .mapctl{position:absolute;right:10px;top:10px;z-index:500;display:flex;flex-direction:column;gap:6px}
 .mapctl button{width:40px;height:40px;min-height:40px;padding:0;font-size:18px;opacity:.92}
-.maphint{position:absolute;left:10px;bottom:34px;right:60px;z-index:500;font-size:12px;color:var(--muted);pointer-events:none}
 .moverow{display:flex;gap:6px;margin-top:6px;align-items:center}
 .moverow button{min-height:34px;padding:4px 10px;background:rgba(255,255,255,.18);border-color:rgba(255,255,255,.45);color:inherit}
 .moverow button.save{background:#fff;color:#000;font-weight:700}
@@ -106,6 +117,7 @@ button.on{outline:2px solid var(--accent)}
 .tile .v small{font-size:13px;color:var(--muted);font-weight:400;margin-left:2px}
 .tile.wide{grid-column:span 2}
 .tile.full{grid-column:1/-1}
+.tile .v.pos{font-size:18px;line-height:1.35;font-variant-numeric:tabular-nums}
 .sun{display:flex;align-items:center;gap:6px}
 .sun svg{flex:none;color:var(--warn)}
 .sun b{font-weight:600;margin-right:10px}
@@ -170,11 +182,13 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
   <span class="conn" id="conn"><span class="dot"></span>…</span>
   <button class="hbtn" id="soundBtn" title="Sound alarms on this device">Sound off</button>
   <button class="hbtn" id="themeBtn" title="Display mode">Night</button>
+  <button class="hbtn gear" id="gearBtn" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
 </header>
-<main>
+<div class="alerts">
   <div class="banner" id="banner"><div class="big" id="bBig" style="display:none"></div><div class="msg"><div class="title" id="bTitle">Connecting…</div><div class="sub" id="bSub"></div></div><button id="bSil" style="display:none">Silence 5 min</button></div>
   <div class="soundoff" id="soundHint"><span class="grow">Sound is off on this device. Tap to enable alarm sound here (browsers need one tap first).</span><button class="small" id="soundHintBtn">Enable</button></div>
-
+</div>
+<main id="mainView">
   <div class="layout">
     <div>
       <div class="mapwrap" id="mapwrap">
@@ -193,7 +207,6 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
         <div class="mapctl">
           <button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">−</button><button id="zfit" title="Fit circle and boat">⤢</button>
         </div>
-        <div class="maphint" id="maphint"></div>
       </div>
       <div class="trackbar"><span id="trackInfo">Track: –</span><button class="small" id="newTrack" title="Delete the recorded track and the max swing, start recording afresh">Start new track</button></div>
       <h2>Now</h2>
@@ -243,8 +256,19 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
         <div class="err" id="watchErr"></div>
       </div>
 
-      <h2>Alarm settings</h2>
-      <div class="card">
+    </div>
+  </div>
+</main>
+<main id="settingsView" hidden>
+  <div class="setbar">
+    <button id="setBack" aria-label="Back to the anchor watch">← Back</button>
+    <h2 class="settitle">Settings</h2>
+    <span class="note grow" id="settingsMsg" style="margin:0;text-align:right"></span>
+    <button class="primary" id="saveSettings">Save settings</button>
+  </div>
+  <div class="setgrid">
+    <section class="card">
+      <h3>Alarms</h3>
         <div class="row">
           <label class="f">Drag confirm (s)<input type="number" data-s="confirm_s" min="0" max="600"></label>
           <label class="f">GPS lost after (s)<input type="number" data-s="gps_timeout_s" min="5" max="600"></label>
@@ -254,32 +278,9 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
           <label class="f">Max wind (kn, 0 = off)<input type="number" data-s="max_wind_kn" min="0"></label>
         </div>
         <div class="row">
-          <label class="f">GPS → bow roller (m)<input type="number" data-s="bow_offset" step="0.5" min="-50" max="50"></label>
-          <label class="f">Default radius (m)<input type="number" data-s="default_radius" min="5" max="2000"></label>
-        </div>
-        <div class="row">
-          <label class="f">Bow height above water (m)<input type="number" data-s="bow_height" step="0.1" min="0" max="10"></label>
-          <label class="f">LOA (m)<input type="number" data-s="loa" step="0.1" min="0" max="100"></label>
-        </div>
-        <div class="row">
-          <label class="f">Recommended chain formula<input type="text" data-s="chain_formula" placeholder="5*(D+B)" autocomplete="off" spellcheck="false"></label>
-        </div>
-        <div class="note" style="margin-top:4px">D = max water depth next 24 h, B = bow height, LOA. Numbers, + − * / (or x) and brackets, e.g. <b>3*D + LOA</b> or <b>5*(D+B)</b>. Rounded up to whole metres.</div>
-        <div class="row">
           <label class="f">Min AIS distance (m, 0 = off)<input type="number" data-s="min_ais_dist" step="1" min="0" max="2000"></label>
         </div>
-        <div class="row">
-          <label class="f">Draught (m, 0 = off)<input type="number" data-s="draught" step="0.05" min="0" max="10"></label>
-          <label class="f" id="tdLabel">Transducer below waterline (m)<input type="number" data-s="transducer_depth" step="0.05" min="0" max="5"></label>
-        </div>
-        <div class="row">
-          <label class="f">GPS source<select id="gpsSel"></select></label>
-        </div>
-        <div class="note" id="gpsInfo" style="margin-top:4px"></div>
-        <div class="row">
-          <label class="f">My MMSI (never shown as an AIS target)<input type="text" data-s="own_mmsi" inputmode="numeric" maxlength="9" placeholder="9 digits"></label>
-        </div>
-        <div class="suggest" id="mmsiSuggest" style="display:none"></div>
+        <div class="row"><label class="check"><input type="checkbox" data-s="pc_sound"> Beep on the watch PC</label></div>
         <div class="pushbox">
           <div class="row" style="justify-content:space-between">
             <label class="check"><input type="checkbox" data-s="push_alerts"> Phone alerts (Pushover)</label>
@@ -294,26 +295,57 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
             <button class="small" id="aliveCheck">Ping now</button>
           </div>
           <div class="note" id="aliveStatus" style="margin-top:4px"></div>
+        </div>
+    </section>
+    <section class="card">
+      <h3>Boat details</h3>
+        <div class="row">
+          <label class="f">My MMSI (never shown as an AIS target)<input type="text" data-s="own_mmsi" inputmode="numeric" maxlength="9" placeholder="9 digits"></label>
+        </div>
+        <div class="suggest" id="mmsiSuggest" style="display:none"></div>
+        <div class="row">
+          <label class="f">LOA (m)<input type="number" data-s="loa" step="0.1" min="0" max="100"></label>
+          <label class="f">Draught (m, 0 = off)<input type="number" data-s="draught" step="0.05" min="0" max="10"></label>
+        </div>
+        <div class="row">
+          <label class="f">Bow height above water (m)<input type="number" data-s="bow_height" step="0.1" min="0" max="10"></label>
+          <label class="f">GPS → bow roller (m)<input type="number" data-s="bow_offset" step="0.5" min="-50" max="50"></label>
+        </div>
+        <div class="row">
+          <label class="f" id="tdLabel">Transducer below waterline (m)<input type="number" data-s="transducer_depth" step="0.05" min="0" max="5"></label>
+        </div>
+    </section>
+    <section class="card">
+      <h3>Other settings</h3>
+        <div class="row">
+          <label class="f">Default radius (m)<input type="number" data-s="default_radius" min="5" max="2000"></label>
+          <label class="f">Position format<select data-s="pos_format"><option value="dmm">12° 34.567′ N (degrees, minutes)</option><option value="dms">12° 34′ 34.0″ N (deg, min, sec)</option><option value="dd">12.57612° N (decimal degrees)</option></select></label>
+        </div>
+        <div class="row">
+          <label class="f">Recommended chain formula<input type="text" data-s="chain_formula" placeholder="5*(D+B)" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <div class="note" style="margin-top:4px">D = max water depth next 24 h, B = bow height, LOA. Numbers, + − * / (or x) and brackets, e.g. <b>3*D + LOA</b> or <b>5*(D+B)</b>. Rounded up to whole metres.</div>
+        <div class="row">
+          <label class="f">GPS source<select id="gpsSel"></select></label>
+        </div>
+        <div class="note" id="gpsInfo" style="margin-top:4px"></div>
           <div class="row" style="justify-content:space-between;margin-top:10px">
             <label class="check"><input type="checkbox" data-s="internet_ais"> Internet AIS (aisstream.io)</label>
             <button class="small" id="netAisCheck">Reconnect</button>
           </div>
           <div class="note" id="netAisStatus" style="margin-top:4px"></div>
-        </div>
         <details><summary>More</summary>
           <div class="row">
             <label class="f">GPS sources, in order (advanced)<input type="text" data-s="gps_sources"></label>
             <label class="f">Track kept (h)<input type="number" data-s="track_hours" min="1" max="72"></label>
           </div>
-          <div class="row"><label class="check"><input type="checkbox" data-s="pc_sound"> Beep on the watch PC</label></div>
           <p class="note">Sources are tried in this order, the next one takes over when a GPS stops. 254 is the Orca Core's own GPS. A GPS whose position has not changed at all for 60 s counts as frozen and is skipped.</p>
         </details>
-        <div class="row"><button class="primary" id="saveSettings">Save settings</button><span class="note" id="settingsMsg" style="margin:0"></span></div>
-      </div>
-
-      <h2>Log</h2>
+    </section>
+    <section class="logsec">
+      <h3>Log</h3>
       <div class="card log" id="log"></div>
-    </div>
+    </section>
   </div>
 </main>
 <footer id="footer">Anchor Watch</footer>
@@ -376,7 +408,8 @@ async function poll(){
 function render(){
   const lost=(Date.now()-lastOk)/1000;
   const unreachable=lost>15;
-  $('conn').innerHTML=`<span class="dot ${S&&S.core.connected&&!unreachable?'on':''}"></span>${unreachable?'watch offline':S&&S.core.connected?'Core live':'Core offline'}`;
+  const ct=unreachable?'watch offline':S&&S.core.connected?'Core live':'Core offline';
+  $('conn').innerHTML=`<span class="dot ${S&&S.core.connected&&!unreachable?'on':''}" title="${ct}"></span><span class="lbl">${ct}</span>`;
   if(!S){if(unreachable)banner('alarm flash','Anchor watch not reachable','Is anchor_watch.py running?');else banner('','Connecting…','');alarmSound(unreachable);return}
   const a=S.anchor, b=S.boat, p=b.pos;
   // banner
@@ -409,7 +442,7 @@ function render(){
       :a&&a.depth!=null?`water depth · at drop ${f2(a.depth)} m`:'water depth'),
     tile('True wind',f0(b.tws),'kn',b.tws==null&&S.settings.max_wind_kn>0?'<span style="color:var(--warn)">no wind data: wind alarm inactive</span>'
       :b.twd!=null?`from ${f0(b.twd)}° ${card(b.twd)}`:''),
-    sunTile(),
+    sunTile(), positionTile(),
     tile('Heading',b.heading!=null?f0(b.heading):'–','°T',''),
     tile('SOG',f1(b.sog),'kn',''),
     tile('GPS',p?(p.hdop!=null&&p.hdop>2?'Poor':'OK'):'Lost','',gpsSub),
@@ -420,7 +453,6 @@ function render(){
       tideTile(),
   ].join('');
   $('log').innerHTML=S.events.slice().reverse().map(e=>`<div><span class="t">${clock(e.t)}</span><span class="${e.kind}">${esc(e.text)}</span></div>`).join('')||'<div class="note">Nothing yet.</div>';
-  $('maphint').textContent=p?`${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}`:'';
   $('trackInfo').textContent=S.track_points?`Track since ${dayTime(S.track_start)} · ${S.track_points.toLocaleString()} points`:'Track: empty, recording starts with the next position';
   const oc=S.own_candidate, sg=$('mmsiSuggest');
   if(oc&&!S.settings.own_mmsi){const html=`AIS ${esc(oc.name||'')} ${esc(oc.mmsi)} is ${f0(oc.dist)} m from your GPS, probably your own boat. <button class="small" data-mmsi="${esc(oc.mmsi)}">Use as My MMSI</button>`;if(sg.innerHTML!==html)sg.innerHTML=html;sg.style.display='flex'}
@@ -531,6 +563,25 @@ function keelBar(P){
     +`<div class="kbar"><i class="hull" style="width:${kp.toFixed(1)}%"></i><i class="clear" style="width:${(100-kp).toFixed(1)}%"></i></div>`
     +`<div class="kl s"><span>draught ${P.draught.toFixed(2)} m</span><span>water ${f2(P.min)} m at ${hm(new Date(P.min_t*1000))}</span></div></div>`;
 }
+// ---------- position, in the format of the settings
+function fmtPos(lat,lon,f){
+  const one=(v,pos,neg,degW)=>{
+    const hemi=v>=0?pos:neg, a=Math.abs(v);
+    if(f==='dd')return `${a.toFixed(5)}° ${hemi}`;
+    let d=Math.floor(a), m=(a-d)*60;
+    if(f==='dms'){let mi=Math.floor(m), s=(m-mi)*60; if(+s.toFixed(1)>=60){s=0;mi++} if(mi>=60){mi=0;d++}
+      return `${String(d).padStart(degW,'0')}° ${p2(mi)}′ ${s.toFixed(1).padStart(4,'0')}″ ${hemi}`}
+    if(+m.toFixed(3)>=60){m=0;d++}
+    return `${String(d).padStart(degW,'0')}° ${m.toFixed(3).padStart(6,'0')}′ ${hemi}`;
+  };
+  return [one(lat,'N','S',2),one(lon,'E','W',3)];
+}
+function positionTile(){
+  const p=S.boat.pos;
+  if(!p)return `<div class="tile wide"><div class="l">Position</div><div class="v">–</div><div class="s">no GPS position</div></div>`;
+  const [la,lo]=fmtPos(p.lat,p.lon,S.settings.pos_format||'dmm');
+  return `<div class="tile wide"><div class="l">Position</div><div class="v pos">${la}<br>${lo}</div><div class="s">GPS ${esc(p.source)}${p.source==='254'?' (Orca Core)':''}${p.sats!=null?' · '+p.sats+' sats':''}</div></div>`;
+}
 function distBig(){return S.distance!=null?`${f0(S.distance)}<small> m</small>`:''}
 // fixed elements, only their text changes, so a tap on the button is never lost to a re-render
 function banner(cls,title,sub,big='',btn=false){
@@ -552,8 +603,8 @@ seamarks.setZIndex(3);
 const map=L.map('map',{zoomControl:false,preferCanvas:true,zoomSnap:1,maxZoom:21}).setView([39,1.5],9);
 map.attributionControl.setPrefix('<a href="https://leafletjs.com" target="_blank">Leaflet</a> · not for navigation');
 L.control.scale({imperial:false,position:'bottomleft'}).addTo(map);
-let base=LS.get('base','sea');if(base==='chart')base='sea';if(!bases[base])base='sea';   // 'chart' = name before 1.4.0
-function setBase(b){map.removeLayer(bases[base]);base=b;LS.set('base',b);bases[b].addTo(map);if(bases[b].bringToBack)bases[b].bringToBack();
+let base='street';   // every start of the page shows the street map; a change only lasts while the page is open
+function setBase(b){map.removeLayer(bases[base]);base=b;bases[b].addTo(map);if(bases[b].bringToBack)bases[b].bringToBack();
   for(const x of $('layerbar').querySelectorAll('[data-b]'))x.classList.toggle('sel',x.dataset.b===b)}
 function setSeamarks(on){LS.set('seamarks',on?'1':'0');if(on)seamarks.addTo(map);else map.removeLayer(seamarks);$('seaBtn').classList.toggle('sel',on)}
 $('layerbar').onclick=e=>{const b=e.target.dataset.b;if(b)setBase(b);else if(e.target.id==='seaBtn')setSeamarks(!map.hasLayer(seamarks))};
@@ -713,6 +764,16 @@ $('saveSettings').onclick=async()=>{
   const s={};for(const el of document.querySelectorAll('[data-s]'))s[el.dataset.s]=el.type==='checkbox'?el.checked:el.type==='number'?+el.value:el.value;
   $('settingsMsg').textContent='';const ok=await cmd({action:'settings',settings:s},$('settingsMsg'));if(ok){loadSettings();$('settingsMsg').textContent='Saved'}
 };
+// ---------- screens: the anchor watch, or the settings (#settings, so the phone's back button works)
+function showView(){
+  const s=location.hash==='#settings';
+  $('mainView').hidden=s;$('settingsView').hidden=!s;$('gearBtn').classList.toggle('on',s);
+  if(!s)setTimeout(()=>map.invalidateSize(),0);
+  window.scrollTo(0,0);
+}
+$('gearBtn').onclick=()=>{location.hash=location.hash==='#settings'?'':'settings'};
+$('setBack').onclick=()=>{location.hash=''};
+window.addEventListener('hashchange',showView);showView();
 applyTheme();updSound();poll();
 </script>
 </body>

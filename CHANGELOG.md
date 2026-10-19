@@ -4,6 +4,22 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.10 — Settings screen
+
+### 1.10.0
+- **Separate Settings screen** behind a gear at the top right, in the sections *Alarms* (drag confirm, GPS lost, min
+  water depth, max wind, min AIS distance, PC beep, phone alerts and still-alive check), *Boat details* (My MMSI, LOA,
+  draught, bow height, GPS to bow roller, transducer depth) and *Other settings* (default radius, position format,
+  chain formula, GPS source, internet AIS, track kept), with the **log** at the bottom. Opened through `#settings`, so
+  the phone's back button returns to the watch; the alarm banner stays visible on both screens.
+- **Position** tile with a **Position format** setting (`dmm` degrees + decimal minutes, `dms`, `dd`); the coordinates
+  are no longer printed on the map.
+- The map **always opens on Street map**.
+- `start_anchor_watch.cmd` **no longer opens a browser tab** on every start (so not on every deploy either).
+- On a phone the header shows the connection as a dot only, so the title fits next to the gear.
+
+---
+
 ## 1.9 — Chain formula, AIS proximity
 
 ### 1.9.0

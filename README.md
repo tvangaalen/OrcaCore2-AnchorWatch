@@ -25,7 +25,7 @@ Double-click `start_anchor_watch.cmd`. It:
    never writes into the CA folder and never touches the Windows certificate store;
 2. creates `.venv` on first run;
 3. starts the server on the PC's private LAN address only (the same address MasterVolt YMS uses, written to
-   `certs/bind-address.txt`), port 8766, and opens the page.
+   `certs/bind-address.txt`), port 8766. It prints the address but does not open a browser tab.
 
 `run_anchor.cmd` still works and calls `start_anchor_watch.cmd`. The server refuses any address that is not localhost
 or a private LAN address (10.x, 172.16-31.x, 192.168.x). There is no login: anyone on the boat network can open
@@ -103,6 +103,14 @@ you). If you shut the watch PC down on purpose, pause the check on healthchecks.
 when the API key is in place), otherwise it alerts after the interval.
 
 ### What it does
+
+- **Two screens:** the anchor watch (alarm banner, map, tiles, drop/watch controls) and **Settings** behind the gear
+  at the top right, in three sections — *Alarms*, *Boat details*, *Other settings* — with the log at the bottom. The
+  alarm banner stays visible on both. `#settings` in the address opens the settings directly, and the phone's back
+  button returns to the watch.
+- **Position** tile: the GPS position in the format chosen under *Other settings → Position format*: degrees and
+  decimal minutes (`12° 34.567′ N`, default), degrees/minutes/seconds, or decimal degrees.
+- The map always opens on **Street map**; another layer chosen while the page is open lasts until it is reloaded.
 
 - **The watch runs on the PC, not in the browser.** Alarms are evaluated every second and beep through the PC
   speakers (setting *Beep on the watch PC*) even with no page open. Pages sound too after one tap on *Sound*, and a page

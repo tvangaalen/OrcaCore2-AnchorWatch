@@ -24,7 +24,6 @@ echo The application binds only to this private-LAN address, never to a public i
 echo.
 echo Press Ctrl+C to stop the server.
 echo.
-start "" "https://%ANCHOR_BIND%:8766/"
 
 ".venv\Scripts\python.exe" anchor_watch.py --bind %ANCHOR_BIND% --port 8766 --certfile "%~dp0certs\server-cert.pem" --keyfile "%~dp0certs\server-key.pem" %*
 
