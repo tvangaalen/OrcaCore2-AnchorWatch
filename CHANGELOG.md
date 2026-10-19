@@ -6,6 +6,13 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ## 1.8 — Water depth and under-keel clearance
 
+### 1.8.1
+- **Every depth with two decimals**: Depth tile, depth at drop, the Tide tile (now, lowest/highest, under keel, water
+  at the shallowest moment), the chain-advice tooltip, the rode helper and the depth-alarm text.
+- **Tide tile on a row of its own** at the end of the tiles, full width; the other tiles are packed densely, so Sun
+  and Heading keep their normal height instead of stretching to the Tide tile's. The chart is drawn at the tile's
+  real width (no scaling), so its labels keep their size.
+
 ### 1.8.0
 - **All depths are water depth** (below the waterline): Depth tile, depth alarm (*Min water depth*), depth recorded at
   drop, the rode helper, chain advice and the Tide tile. Water depth = reading + transducer depth, from the sounder's

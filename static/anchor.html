@@ -99,12 +99,13 @@ button.on{outline:2px solid var(--accent)}
 .moverow button.save{background:#fff;color:#000;font-weight:700}
 :root[data-theme="night"] .moverow button.save{background:#000;color:var(--text)}
 .movebar{position:absolute;left:10px;top:10px;right:60px;z-index:600;background:var(--accent);color:#fff;border-radius:10px;padding:8px 12px;font-size:14px;display:none}
-.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;grid-auto-flow:row dense}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 12px}
 .tile .l{color:var(--muted);font-size:12px}
 .tile .v{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .tile .v small{font-size:13px;color:var(--muted);font-weight:400;margin-left:2px}
 .tile.wide{grid-column:span 2}
+.tile.full{grid-column:1/-1}
 .sun{display:flex;align-items:center;gap:6px}
 .sun svg{flex:none;color:var(--warn)}
 .sun b{font-weight:600;margin-right:10px}
@@ -336,7 +337,7 @@ let wake=null;async function requestWake(){try{if('wakeLock' in navigator&&!wake
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&soundOn)requestWake()});
 
 // ---------- formatting
-const f0=v=>v==null?'–':Math.round(v), f1=v=>v==null?'–':v.toFixed(1);
+const f0=v=>v==null?'–':Math.round(v), f1=v=>v==null?'–':v.toFixed(1), f2=v=>v==null?'–':(+v).toFixed(2);   // f2: every depth
 const ago=s=>s==null?'–':s<60?Math.round(s)+' s':s<3600?Math.round(s/60)+' min':(s/3600).toFixed(1)+' h';
 // times are always 24-hour (HH:MM:SS), whatever the device language would pick
 const p2=n=>String(n).padStart(2,'0');
@@ -397,17 +398,18 @@ function render(){
   $('tiles').innerHTML=[
     a?tile('From anchor',S.distance!=null?f0(S.distance):'–','m',S.bearing!=null?`bearing ${f0(S.bearing)}° ${card(S.bearing)}`:''):'',
     a?tile('Max swing',f0(S.max_dist),'m',`limit ${f0(a.radius)} m`):'',
-    tile('Depth',f1(b.depth),'m',b.depth==null&&S.settings.min_depth>0?'<span style="color:var(--warn)">no depth data: depth alarm inactive</span>'
-      :a&&a.depth!=null?`water depth · at drop ${f1(a.depth)} m`:'water depth'),
+    tile('Depth',f2(b.depth),'m',b.depth==null&&S.settings.min_depth>0?'<span style="color:var(--warn)">no depth data: depth alarm inactive</span>'
+      :a&&a.depth!=null?`water depth · at drop ${f2(a.depth)} m`:'water depth'),
     tile('True wind',f0(b.tws),'kn',b.tws==null&&S.settings.max_wind_kn>0?'<span style="color:var(--warn)">no wind data: wind alarm inactive</span>'
       :b.twd!=null?`from ${f0(b.twd)}° ${card(b.twd)}`:''),
-    sunTile(), tideTile(),
+    sunTile(),
     tile('Heading',b.heading!=null?f0(b.heading):'–','°T',''),
     tile('SOG',f1(b.sog),'kn',''),
     tile('GPS',p?(p.hdop!=null&&p.hdop>2?'Poor':'OK'):'Lost','',gpsSub),
     aisDown()&&!netOk()?tile('AIS nearby','–','',`<span style="color:var(--warn)">AIS feed down · ${S.ais_stream.last_message_age!=null?'last data '+ago(S.ais_stream.last_message_age)+' ago':'no data yet'}</span>`)
       :tile('AIS nearby',S.ais.length,'',(S.ais[0]?`closest ${esc(S.ais[0].name||S.ais[0].mmsi)} ${f0(S.ais[0].dist)} m`:'within 600 m')
         +(nNet()?` · ${nNet()} internet`:'')+(aisDown()?' · <span style="color:var(--warn)">local feed down</span>':'')),
+      tideTile(),
   ].join('');
   $('log').innerHTML=S.events.slice().reverse().map(e=>`<div><span class="t">${clock(e.t)}</span><span class="${e.kind}">${esc(e.text)}</span></div>`).join('')||'<div class="note">Nothing yet.</div>';
   $('maphint').textContent=p?`${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}`:'';
@@ -474,13 +476,14 @@ const TIDE_DOWN='<svg class="ic" viewBox="0 0 24 24" width="22" height="22" fill
 // Design B: the depth (or, without a depth reading, the sea level) from 6 h back to 24 h ahead, with the lowest and
 // highest depth of the next 24 h as dashed lines, their times, "now" as a dotted line, the tide trend and the chain
 function tideChart(c,now,lv,P){
-  const W=280,H=126,L=40,R=276,TOP=10,BOT=94,t0=c[0][0],t1=c[c.length-1][0];
+  // drawn at the tile's real width (no scaling), so the labels keep their size on a full-width row
+  const W=Math.max(260,Math.round(($('tiles').clientWidth||300)-26)),H=126,L=40,R=W-4,TOP=10,BOT=94,t0=c[0][0],t1=c[c.length-1][0];
   const vs=c.map(p=>p[1]); let lo=Math.min(...vs), hi=Math.max(...vs); if(hi-lo<0.04){lo-=0.02;hi+=0.02}
   const pad=(hi-lo)*0.12; lo-=pad; hi+=pad;
   const X=t=>L+(t-t0)/(t1-t0)*(R-L), Y=v=>BOT-(v-lo)/(hi-lo)*(BOT-TOP);
   const line=c.map((p,i)=>`${i?'L':'M'}${X(p[0]).toFixed(1)} ${Y(p[1]).toFixed(1)}`).join('');
   const area=`${line}L${X(t1).toFixed(1)} ${BOT}L${X(t0).toFixed(1)} ${BOT}Z`;
-  const dec=P&&P.max-P.min<0.15?2:1, fv=v=>v.toFixed(dec);
+  const fv=v=>v.toFixed(2);
   let g='';
   if(P){
     for(const [v] of [[P.max],[P.min]])g+=`<line class="lim" x1="${L}" x2="${R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/><text x="${L-4}" y="${(Y(v)+4.5).toFixed(1)}" text-anchor="end">${fv(v)}</text>`;
@@ -495,17 +498,17 @@ function tideChart(c,now,lv,P){
 }
 function tideTile(){
   const T=S.tide||{}, P=S.depth_plan||{};
-  if(!T.available)return `<div class="tile wide"><div class="l">Tide</div><div class="v">–</div><div class="s">${esc(T.error?'no tide data: '+T.error:'no tide data yet')}</div></div>`;
+  if(!T.available)return `<div class="tile full"><div class="l">Tide</div><div class="v">–</div><div class="s">${esc(T.error?'no tide data: '+T.error:'no tide data yet')}</div></div>`;
   const dp=P.available&&P.curve&&P.curve.length>1;
   const chart=dp?tideChart(P.curve,S.time,P.now,P):tideChart(T.curve,S.time,T.level,null);
   const label=T.trend==='rising'?'Rising':T.trend==='falling'?'Falling':'–';
   const range=T.range!=null?` · range ${Math.round(T.range*100)} cm`:'';
   const ref='';
   const from=!dp?'':P.source==='sounder'?'from sounder':`from last reading ${dayTime(P.reading_t)}, tide-corrected`;
-  const head=dp?`now ${f1(P.now)} m${ref}`:'sea level';
-  const chip=dp?`<span class="chip" title="${+P.scope}:1 on ${f1(P.max)} m (deepest in 24 h) + ${f1(P.bow_height)} m bow, rounded up">Chain ${P.chain} m</span>`:'';
+  const head=dp?`now ${f2(P.now)} m${ref}`:'sea level';
+  const chip=dp?`<span class="chip" title="${+P.scope}:1 on ${f2(P.max)} m (deepest in 24 h) + ${f2(P.bow_height)} m bow, rounded up">Chain ${P.chain} m</span>`:'';
   const why=dp?'':`<div class="s" style="color:var(--warn)">No depth for the chart: ${esc(P.reason||'no depth reading')}</div>`;
-  return `<div class="tile wide" title="Open-Meteo marine model, sea level incl. tide and weather; grid point ${T.grid?T.grid.map(v=>(+v).toFixed(2)).join(', '):''}; not for navigation">`
+  return `<div class="tile full" title="Open-Meteo marine model, sea level incl. tide and weather; grid point ${T.grid?T.grid.map(v=>(+v).toFixed(2)).join(', '):''}; not for navigation">`
     +`<div class="thead"><span class="l">Tide${dp?' · depth next 24 h':''}</span><b>${head}</b></div>${chart}`
     +`<div class="trow"><span class="trend">${T.trend==='falling'?TIDE_DOWN:TIDE_UP}${label}<small>${range}</small></span>${chip}</div>${why}`
     +`${dp?keelBar(P):''}<div class="s">${from?esc(from)+' · ':''}${T.error?' · <span style="color:var(--warn)">offline copy</span>':''}<a href="https://open-meteo.com/" target="_blank" style="color:inherit">Open-Meteo</a></div></div>`;
@@ -515,10 +518,10 @@ function keelBar(P){
   if(!P.draught)return '';
   const cl=P.clearance_min, tot=Math.max(P.min,P.draught), kp=Math.min(100,P.draught/tot*100);
   const cls=cl<0.5?'bad':cl<1?'warn':'ok';
-  return `<div class="keel ${cls}" title="Shallowest water in the next 24 h (${f1(P.min)} m at ${hm(new Date(P.min_t*1000))}) minus the draught (${P.draught.toFixed(2)} m)">`
-    +`<div class="kl"><span>Under keel, min next 24 h</span><b>${cl.toFixed(1)} m</b></div>`
+  return `<div class="keel ${cls}" title="Shallowest water in the next 24 h (${f2(P.min)} m at ${hm(new Date(P.min_t*1000))}) minus the draught (${P.draught.toFixed(2)} m)">`
+    +`<div class="kl"><span>Under keel, min next 24 h</span><b>${cl.toFixed(2)} m</b></div>`
     +`<div class="kbar"><i class="hull" style="width:${kp.toFixed(1)}%"></i><i class="clear" style="width:${(100-kp).toFixed(1)}%"></i></div>`
-    +`<div class="kl s"><span>draught ${P.draught.toFixed(2)} m</span><span>water ${f1(P.min)} m at ${hm(new Date(P.min_t*1000))}</span></div></div>`;
+    +`<div class="kl s"><span>draught ${P.draught.toFixed(2)} m</span><span>water ${f2(P.min)} m at ${hm(new Date(P.min_t*1000))}</span></div></div>`;
 }
 function distBig(){return S.distance!=null?`${f0(S.distance)}<small> m</small>`:''}
 // fixed elements, only their text changes, so a tap on the button is never lost to a re-render
@@ -690,7 +693,7 @@ function scope(){
   if(d==null){$('scopeOut').textContent='No depth reading.';return}
   const h=d+fb, reach=rode>h?Math.sqrt(rode*rode-h*h):0, off=Math.max(0,+(S.settings.bow_offset||0));
   const sugg=Math.ceil((reach+off)*1.1+5);
-  $('scopeOut').innerHTML=`Depth ${f1(d)} m + bow ${f1(fb)} m → scope ${h?(rode/h).toFixed(1):'–'}:1${rode/h<3?' <b style="color:var(--bad)">(short)</b>':''}. Rode reaches ~${f0(reach)} m; with the GPS→bow offset, 10 % and 5 m GPS margin: <b>${sugg} m</b>.`;
+  $('scopeOut').innerHTML=`Depth ${f2(d)} m + bow ${f2(fb)} m → scope ${h?(rode/h).toFixed(1):'–'}:1${rode/h<3?' <b style="color:var(--bad)">(short)</b>':''}. Rode reaches ~${f0(reach)} m; with the GPS→bow offset, 10 % and 5 m GPS margin: <b>${sugg} m</b>.`;
   $('useScope').dataset.r=sugg;
 }
 $('rode').oninput=$('freeboard').oninput=scope;

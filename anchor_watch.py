@@ -34,7 +34,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -738,7 +738,7 @@ class AnchorWatch:
                     self.max_dist = max(self.max_dist, d)
                     cond["drag"] = (d > a["radius"], s["confirm_s"], f"{d:.0f} m from anchor (limit {a['radius']:.0f} m)")
                 if s["min_depth"] > 0 and boat["depth"] is not None:
-                    cond["depth"] = (boat["depth"] < s["min_depth"], 10, f"{boat['depth']:.1f} m (limit {s['min_depth']:.1f} m)")
+                    cond["depth"] = (boat["depth"] < s["min_depth"], 10, f"{boat['depth']:.2f} m (limit {s['min_depth']:.2f} m)")
                 if s["max_wind_kn"] > 0 and boat["tws"] is not None:
                     cond["wind"] = (boat["tws"] > s["max_wind_kn"], 10, f"{boat['tws']:.0f} kn (limit {s['max_wind_kn']:.0f} kn)")
             for aid, (on, hold, detail) in cond.items():
