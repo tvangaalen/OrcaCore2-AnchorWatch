@@ -259,7 +259,14 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
         </div>
         <div class="row">
           <label class="f">Bow height above water (m)<input type="number" data-s="bow_height" step="0.1" min="0" max="10"></label>
-          <label class="f">Scope for chain advice (x : 1)<input type="number" data-s="scope_ratio" step="0.5" min="2" max="10"></label>
+          <label class="f">LOA (m)<input type="number" data-s="loa" step="0.1" min="0" max="100"></label>
+        </div>
+        <div class="row">
+          <label class="f">Recommended chain formula<input type="text" data-s="chain_formula" placeholder="5*(D+B)" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <div class="note" style="margin-top:4px">D = max water depth next 24 h, B = bow height, LOA. Numbers, + − * / (or x) and brackets, e.g. <b>3*D + LOA</b> or <b>5*(D+B)</b>. Rounded up to whole metres.</div>
+        <div class="row">
+          <label class="f">Min AIS distance (m, 0 = off)<input type="number" data-s="min_ais_dist" step="1" min="0" max="2000"></label>
         </div>
         <div class="row">
           <label class="f">Draught (m, 0 = off)<input type="number" data-s="draught" step="0.05" min="0" max="10"></label>
@@ -407,7 +414,8 @@ function render(){
     tile('SOG',f1(b.sog),'kn',''),
     tile('GPS',p?(p.hdop!=null&&p.hdop>2?'Poor':'OK'):'Lost','',gpsSub),
     aisDown()&&!netOk()?tile('AIS nearby','–','',`<span style="color:var(--warn)">AIS feed down · ${S.ais_stream.last_message_age!=null?'last data '+ago(S.ais_stream.last_message_age)+' ago':'no data yet'}</span>`)
-      :tile('AIS nearby',S.ais.length,'',(S.ais[0]?`closest ${esc(S.ais[0].name||S.ais[0].mmsi)} ${f0(S.ais[0].dist)} m`:'within 600 m')
+      :tile('AIS closest',S.ais[0]?f0(S.ais[0].dist):'–',S.ais[0]?'m':'',(S.ais[0]?`${esc(S.ais[0].name||S.ais[0].mmsi)} · ${S.ais.length} within 600 m`:'none within 600 m')
+        +(S.settings.min_ais_dist>0?` · alarm < ${f0(S.settings.min_ais_dist)} m`:'')
         +(nNet()?` · ${nNet()} internet`:'')+(aisDown()?' · <span style="color:var(--warn)">local feed down</span>':'')),
       tideTile(),
   ].join('');
@@ -506,12 +514,12 @@ function tideTile(){
   const ref='';
   const from=!dp?'':P.source==='sounder'?'from sounder':`from last reading ${dayTime(P.reading_t)}, tide-corrected`;
   const head=dp?`now ${f2(P.now)} m${ref}`:'sea level';
-  const chip=dp?`<span class="chip" title="${+P.scope}:1 on ${f2(P.max)} m (deepest in 24 h) + ${f2(P.bow_height)} m bow, rounded up">Chain ${P.chain} m</span>`:'';
+  const chip=dp?`<span class="chip" title="${esc(P.formula)} with D ${f2(P.max)} m (deepest in 24 h), B ${f2(P.bow_height)} m, LOA ${f2(P.loa)} m, rounded up">Recommended chain ${P.chain} m</span>`:'';
   const why=dp?'':`<div class="s" style="color:var(--warn)">No depth for the chart: ${esc(P.reason||'no depth reading')}</div>`;
   return `<div class="tile full" title="Open-Meteo marine model, sea level incl. tide and weather; grid point ${T.grid?T.grid.map(v=>(+v).toFixed(2)).join(', '):''}; not for navigation">`
     +`<div class="thead"><span class="l">Tide${dp?' · depth next 24 h':''}</span><b>${head}</b></div>${chart}`
     +`<div class="trow"><span class="trend">${T.trend==='falling'?TIDE_DOWN:TIDE_UP}${label}<small>${range}</small></span>${chip}</div>${why}`
-    +`${dp?keelBar(P):''}<div class="s">${from?esc(from)+' · ':''}${T.error?' · <span style="color:var(--warn)">offline copy</span>':''}<a href="https://open-meteo.com/" target="_blank" style="color:inherit">Open-Meteo</a></div></div>`;
+    +`${dp?`<div class="s" style="text-align:right">${esc(P.formula)} · D ${f2(P.max)} · B ${f2(P.bow_height)} · LOA ${f2(P.loa)}</div>`:''}${dp?keelBar(P):''}<div class="s">${from?esc(from)+' · ':''}${T.error?' · <span style="color:var(--warn)">offline copy</span>':''}<a href="https://open-meteo.com/" target="_blank" style="color:inherit">Open-Meteo</a></div></div>`;
 }
 // clearance under the keel at the shallowest moment of the next 24 h: draught and clearance as one bar, scaled to the depth
 function keelBar(P){

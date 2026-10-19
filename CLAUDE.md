@@ -22,6 +22,7 @@ Overview: `README.md`. Release history: `CHANGELOG.md`.
   restrict requests to the 192.168.1.x subnet.
 - HTTPS certificates come from the existing *Mastervolt Local CA* (`setup_local_https.ps1`). Never create a new CA
   (the iPhone would need it installed again), never write into the CA folder, never change the Windows trust store.
+- The chain formula is user input: only ever evaluate it through `ChainFormula` (parsed, no `eval`).
 - Push alerts go out only through the `Pushover` worker thread; never send from `tick()` or a request thread, and keep
   anchor drag as the only emergency (priority 2) alert so the phone does not learn to ignore it.
 - The still-alive ping must keep running independently of the alarm logic (its own thread in `StillAlive`) and must

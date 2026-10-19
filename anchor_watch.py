@@ -34,7 +34,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.8.1"
+VERSION = "1.9.0"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -44,6 +44,7 @@ DEFAULT_GPS = "4,127,3,254"
 TRACK_EVERY_S = 5
 AIS_RANGE_M = 600
 AIS_MAX_AGE_S = 900     # an AIS position older than this is not shown (local or internet)
+AIS_ALARM_AGE_S = 180   # internet AIS older than this does not count for the proximity alarm
 
 DEFAULTS = {
     "default_radius": 40.0,   # m, used when dropping without a radius
@@ -61,13 +62,15 @@ DEFAULTS = {
     "internet_ais": True,     # add AIS targets from aisstream.io (needs aisstream.json); the local receiver always wins
     "track_hours": 24,
     "bow_height": 1.2,        # m from the waterline to the bow roller, for the chain advice
-    "scope_ratio": 5.0,       # chain length : (depth + bow height), for the chain advice
+    "chain_formula": "5*(D+B)",  # recommended chain; D = max depth next 24 h, B = bow height, LOA (see ChainFormula)
+    "loa": 0.0,               # m, length over all, for chain formulas that use LOA
+    "min_ais_dist": 0.0,      # m, alarm when an AIS target comes closer than this while anchored, 0 = off
     "draught": 0.0,           # m, keel below the waterline; 0 = off. Shows the clearance under the keel
     "transducer_depth": 0.0,  # m, transducer below the waterline, used when the sounder does not report it
 }
 SETTING_LIMITS = {"default_radius": (5, 2000), "confirm_s": (0, 600), "gps_timeout_s": (5, 600), "core_timeout_s": (5, 600),
                   "min_depth": (0, 500), "max_wind_kn": (0, 150), "bow_offset": (-50, 50), "track_hours": (1, 72),
-                  "alive_minutes": (0, 1440), "bow_height": (0, 10), "scope_ratio": (2, 10),
+                  "alive_minutes": (0, 1440), "bow_height": (0, 10), "loa": (0, 100), "min_ais_dist": (0, 2000),
                   "draught": (0, 10), "transducer_depth": (0, 5)}
 
 # ---------------------------------------------------------------- geometry (flat earth is fine for < a few km)
@@ -371,9 +374,76 @@ def depth_window(series, now, depth, depth_t, hours=24, back=6):
     return {"now": d(pts[0][1]), "min": d(lo[1]), "min_t": round(lo[0]), "max": d(hi[1]), "max_t": round(hi[0]), "curve": curve}
 
 
-def chain_advice(max_depth, bow_height, scope):
-    """Chain to let out, in whole metres (rounded up): scope x (deepest water in the window + bow height)."""
-    return math.ceil((max_depth + bow_height) * scope - 1e-9)
+class ChainFormula:
+    """The recommended-chain formula of the settings, e.g. "5*(D+B)" or "3 x D + 1 x LOA".
+
+    Variables: D = deepest water in the next 24 h, B = bow height, LOA = length over all (any case). Numbers, + - * /,
+    "x" or "×" for times, and brackets. Parsed into a small expression tree, never evaluated as code.
+    """
+    VARS = ("D", "B", "LOA")
+    TOKEN = re.compile(r"\s*(?:(\d+(?:[.,]\d+)?)|(LOA|D|B)|([-+*/()x×]))", re.I)
+
+    def __init__(self, text):
+        self.text = str(text).strip(); self.toks = []; pos = 0
+        while pos < len(self.text):
+            m = self.TOKEN.match(self.text, pos)
+            if not m or m.end() == pos:
+                rest = self.text[pos:].strip()
+                if not rest: break
+                raise ValueError(f"Chain formula: cannot read '{rest[:12]}'. Use numbers, D, B, LOA, + - * / x and brackets")
+            num_, var, op = m.groups(); pos = m.end()
+            if num_: self.toks.append(("n", float(num_.replace(",", "."))))
+            elif var: self.toks.append(("v", var.upper()))
+            else: self.toks.append(("o", "*" if op in "x×X" else op))
+        if not self.toks: raise ValueError("Chain formula is empty")
+        self.i = 0; self.tree = self._expr()
+        if self.i != len(self.toks): raise ValueError("Chain formula: unexpected text near the end")
+        self(7.3, 1.3, 11.7)                                      # check it computes (values unlikely to divide by zero)
+
+    def _peek(self): return self.toks[self.i] if self.i < len(self.toks) else (None, None)
+
+    def _expr(self):
+        node = self._term()
+        while self._peek() in (("o", "+"), ("o", "-")):
+            op = self.toks[self.i][1]; self.i += 1; node = (op, node, self._term())
+        return node
+
+    def _term(self):
+        node = self._factor()
+        while self._peek() in (("o", "*"), ("o", "/")):
+            op = self.toks[self.i][1]; self.i += 1; node = (op, node, self._factor())
+        return node
+
+    def _factor(self):
+        kind, val = self._peek()
+        if kind is None: raise ValueError("Chain formula ends too early")
+        self.i += 1
+        if kind == "n": return ("n", val)
+        if kind == "v": return ("v", val)
+        if val == "-": return ("neg", self._factor())
+        if val == "(":
+            node = self._expr()
+            if self._peek() != ("o", ")"): raise ValueError("Chain formula: a bracket is not closed")
+            self.i += 1; return node
+        raise ValueError(f"Chain formula: unexpected '{val}'")
+
+    def __call__(self, D, B, LOA):
+        env = {"D": D, "B": B, "LOA": LOA}
+        def ev(n):
+            k = n[0]
+            if k == "n": return n[1]
+            if k == "v": return env[n[1]]
+            if k == "neg": return -ev(n[1])
+            a, b = ev(n[1]), ev(n[2])
+            if k == "/" and b == 0: raise ValueError("Chain formula divides by zero")
+            return a + b if k == "+" else a - b if k == "-" else a * b if k == "*" else a / b
+        return ev(self.tree)
+
+
+def chain_advice(formula, max_depth, bow_height, loa):
+    """Recommended chain in whole metres (rounded up) from the settings' formula."""
+    v = ChainFormula(formula)(max_depth, bow_height, loa)
+    return max(0, math.ceil(v - 1e-9))
 
 
 class TideFeed:
@@ -442,7 +512,7 @@ class Pushover:
     so it can be cancelled when the alarm clears, is silenced in the app, or the anchor is raised.
     """
     API = "https://api.pushover.net/1"
-    PRIORITY = {"drag": 2, "gps": 1, "core": 1, "depth": 1, "wind": 1}   # 2 = emergency, 1 = high
+    PRIORITY = {"drag": 2, "gps": 1, "core": 1, "depth": 1, "wind": 1, "ais": 1}   # 2 = emergency, 1 = high
     # Emergency: repeat every 30 s (Pushover's minimum) for up to 3 h (its maximum) until acknowledged in the app.
     # iOS caps one notification's sound at 30 s, so this is as close to "rings until I stop it" as a push can get.
     RETRY_S, EXPIRE_S = 30, 10800
@@ -637,7 +707,7 @@ class StillAlive:
 
 
 class AnchorWatch:
-    ALARM_TEXT = {"drag": "Anchor drag", "gps": "GPS position lost", "core": "No data from Orca Core",
+    ALARM_TEXT = {"drag": "Anchor drag", "gps": "GPS position lost", "core": "No data from Orca Core", "ais": "AIS target close",
                   "depth": "Shallow water", "wind": "Wind limit"}
 
     def __init__(self, store, state_file):
@@ -674,6 +744,9 @@ class AnchorWatch:
         except FileNotFoundError: return
         except Exception as e: log.warning("could not read %s: %s", self.state_file, e); return
         self.settings.update({k: v for k, v in d.get("settings", {}).items() if k in DEFAULTS})
+        old_scope = d.get("settings", {}).get("scope_ratio")
+        if old_scope is not None and "chain_formula" not in d.get("settings", {}):        # fixed scope before 1.9.0
+            self.settings["chain_formula"] = f"{old_scope:g}*(D+B)"
         if self.settings["gps_sources"] == "4,127,3": self.settings["gps_sources"] = DEFAULT_GPS   # old default (< 1.2.0)
         self.anchor = d.get("anchor"); self.max_dist = d.get("max_dist", 0.0)
         self.track = deque(d.get("track", [])); self.events.extend(d.get("events", [])); self.last_depth = d.get("last_depth")
@@ -695,6 +768,7 @@ class AnchorWatch:
         now = now or time.time()
         with self.store.lock:
             sensors = dict(self.store.values["sensors"]); connected = self.store.status["sensors"]["connected"]
+            ais = dict(self.store.values["ais"]) if self.settings["min_ais_dist"] > 0 else None
         with self.lock:
             s = self.settings
             prefs = [x.strip() for x in str(s["gps_sources"]).split(",") if x.strip()]
@@ -739,6 +813,16 @@ class AnchorWatch:
                     cond["drag"] = (d > a["radius"], s["confirm_s"], f"{d:.0f} m from anchor (limit {a['radius']:.0f} m)")
                 if s["min_depth"] > 0 and boat["depth"] is not None:
                     cond["depth"] = (boat["depth"] < s["min_depth"], 10, f"{boat['depth']:.2f} m (limit {s['min_depth']:.2f} m)")
+                if ais is not None and pos:
+                    # closest AIS target (own receiver, or internet AIS younger than AIS_ALARM_AGE_S: an older internet
+                    # position could be anywhere by now)
+                    net = self.netais.snapshot(now) if self.netais is not None and s["internet_ais"] else None
+                    near = [t for t in read_ais(ais, now, pos["lat"], pos["lon"], str(s["own_mmsi"]), None, net)
+                            if t["src"] == "local" or t["age"] <= AIS_ALARM_AGE_S]
+                    if near:
+                        t = near[0]
+                        cond["ais"] = (t["dist"] < s["min_ais_dist"], 10, f"{t['name'] or t['mmsi']} {t['dist']:.0f} m (limit {s['min_ais_dist']:.0f} m)")
+                    else: cond["ais"] = (False, 10, "")
                 if s["max_wind_kn"] > 0 and boat["tws"] is not None:
                     cond["wind"] = (boat["tws"] > s["max_wind_kn"], 10, f"{boat['tws']:.0f} kn (limit {s['max_wind_kn']:.0f} kn)")
             for aid, (on, hold, detail) in cond.items():
@@ -816,6 +900,8 @@ class AnchorWatch:
                 for k, v in (c.get("settings") or {}).items():
                     if k not in DEFAULTS: continue
                     if isinstance(DEFAULTS[k], bool): v = bool(v)
+                    elif k == "chain_formula":
+                        v = ChainFormula(v).text                             # raises ValueError with a clear message
                     elif k == "own_mmsi":
                         v = str(v).strip()
                         if v and not (v.isdigit() and len(v) == 9): raise ValueError("My MMSI must be 9 digits (or empty)")
@@ -912,7 +998,8 @@ class AnchorWatch:
         if not w: return {"available": False, "reason": "last depth reading is older than the tide data" if not live else "tide data does not cover the next 24 h"}
         dr = float(s["draught"])
         return {"available": True, **w, "source": "sounder" if live else "last reading", "reading_t": round(t),
-                "chain": chain_advice(w["max"], s["bow_height"], s["scope_ratio"]), "scope": s["scope_ratio"], "bow_height": s["bow_height"],
+                "chain": chain_advice(s["chain_formula"], w["max"], s["bow_height"], s["loa"]), "formula": s["chain_formula"],
+                "bow_height": s["bow_height"], "loa": s["loa"],
                 "draught": dr or None, "clearance_min": round(w["min"] - dr, 2) if dr else None}
 
     def track_since(self, t, gen):

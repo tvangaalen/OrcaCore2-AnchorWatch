@@ -632,8 +632,8 @@ class DepthPlanTest(unittest.TestCase):
         self.assertEqual(w["now"], 8.0)
         self.assertAlmostEqual(w["max"] - w["min"], 0.20, delta=0.01)          # the full tidal range fits in 24 h
         self.assertTrue(now <= w["min_t"] <= now + 86400 and now <= w["max_t"] <= now + 86400)
-        self.assertEqual(chain_advice(w["max"], 1.2, 5), math.ceil((w["max"] + 1.2) * 5))
-        self.assertEqual(chain_advice(8.0, 1.2, 5), 46); self.assertEqual(chain_advice(8.01, 1.2, 5), 47)   # whole metres, up
+        self.assertEqual(chain_advice("5*(D+B)", w["max"], 1.2, 0), math.ceil((w["max"] + 1.2) * 5))
+        self.assertEqual(chain_advice("5*(D+B)", 8.0, 1.2, 0), 46); self.assertEqual(chain_advice("5*(D+B)", 8.01, 1.2, 0), 47)   # whole metres, up
         self.assertIsNone(depth_window(s, s[-1][0] - 3600, 8.0, s[-1][0] - 3600))   # 24 h not covered
         c = w["curve"]                                           # for the chart: 6 h back to 24 h ahead, in depth
         self.assertEqual((c[0][0], c[-1][0]), (now - 6 * 3600, now + 24 * 3600))
@@ -662,7 +662,7 @@ class DepthPlanTest(unittest.TestCase):
             self.assertTrue(p["available"]); self.assertEqual(p["source"], "sounder")
             self.assertAlmostEqual(p["now"], 8.0, delta=0.01)                   # 7.6 below the transducer + 0.4 to the waterline
             self.assertEqual(p["chain"], math.ceil((p["max"] + 1.2) * 5)); self.assertIsNone(p["clearance_min"])   # no draught set
-            w.command({"action": "settings", "settings": {"scope_ratio": 3, "bow_height": 2, "draught": 2.3}})
+            w.command({"action": "settings", "settings": {"chain_formula": "3*(D+B)", "bow_height": 2, "draught": 2.3}})
             p2 = w.depth_plan(sim.t)
             self.assertEqual(p2["chain"], math.ceil((p["max"] + 2) * 3))
             self.assertAlmostEqual(p2["clearance_min"], p["min"] - 2.3, delta=0.001)   # shallowest water in 24 h minus the keel
@@ -702,6 +702,73 @@ class DepthPlanTest(unittest.TestCase):
             sounder(2.7, 12); self.assertNotIn("depth", w.alarms)                # 3.1 m of water: above 3 m
             sounder(2.5, 12); self.assertIn("depth", w.alarms)                   # 2.9 m of water (2.5 below the transducer)
         finally: sim.dir.cleanup()
+
+
+class ChainFormulaTest(unittest.TestCase):
+    def test_formulas(self):
+        from anchor_watch import ChainFormula, chain_advice
+        self.assertAlmostEqual(ChainFormula("3 x D + 1 x LOA")(5.37, 1.2, 14.9), 31.01)
+        self.assertAlmostEqual(ChainFormula("3*d+loa")(5.37, 1.2, 14.9), 31.01)              # any case
+        self.assertAlmostEqual(ChainFormula("2,5 × (D + B) - 1")(4, 1, 0), 11.5)               # comma decimals, ×, minus
+        self.assertAlmostEqual(ChainFormula("D/(B-1)")(6, 3, 0), 3)                            # not refused by the save check
+        self.assertEqual(chain_advice("3*D + LOA", 5.37, 1.2, 14.9), 32)                       # rounded up to whole metres
+        self.assertEqual(chain_advice("D - 50", 5, 1, 0), 0)                                   # never negative
+
+    def test_invalid_formulas_are_refused(self):
+        from anchor_watch import ChainFormula
+        for bad in ("", "3*", "(D+B", "D+B)", "3**D", "__import__('os')", "D/0", "X"):
+            with self.assertRaises(ValueError, msg=bad): ChainFormula(bad)
+
+    def test_setting_and_old_scope_migration(self):
+        s = Sim(); w = s.watch
+        try:
+            with self.assertRaises(ValueError): w.command({"action": "settings", "settings": {"chain_formula": "3*D+"}})
+            w.command({"action": "settings", "settings": {"chain_formula": " 3 x D + LOA ", "loa": 14.9}})
+            self.assertEqual((w.settings["chain_formula"], w.settings["loa"]), ("3 x D + LOA", 14.9))
+            s.file.write_text(json.dumps({"settings": {"scope_ratio": 4.0}}), encoding="utf-8")   # saved by 1.8
+            self.assertEqual(AnchorWatch(s.store, s.file).settings["chain_formula"], "4*(D+B)")
+        finally: s.dir.cleanup()
+
+
+class AisAlarmTest(unittest.TestCase):
+    def ais(self, mmsi, lat, lon, t):
+        return {f"ais.x.{mmsi}.position.latitude": (lat, t), f"ais.x.{mmsi}.position.longitude": (lon, t),
+                f"ais.x.{mmsi}.position.name": ("CLOSE ONE", t)}
+
+    def test_alarm_when_a_target_comes_closer_than_the_limit(self):
+        s = Sim(); w = s.watch
+        try:
+            s.run(2, lat=LAT, lon=LON); w.command({"action": "drop", "mode": "here", "radius": 40})
+            w.command({"action": "settings", "settings": {"min_ais_dist": 25, "own_mmsi": "123456789"}})
+            for dist, seconds in ((60, 12), (20, 5)):
+                for _ in range(seconds):
+                    s.store.values["ais"].update(self.ais("987654321", *offset(LAT, LON, 45, dist), s.t)); s.run(1, lat=LAT, lon=LON)
+                if dist == 60: self.assertNotIn("ais", w.alarms)
+            self.assertNotIn("ais", w.alarms)                                    # not yet: 10 s confirm
+            for _ in range(6):
+                s.store.values["ais"].update(self.ais("987654321", *offset(LAT, LON, 45, 20), s.t)); s.run(1, lat=LAT, lon=LON)
+            self.assertIn("ais", w.alarms); self.assertIn("CLOSE ONE 20 m (limit 25 m)", w.alarms["ais"]["detail"])
+            s.store.values["ais"].update(self.ais("123456789", *offset(LAT, LON, 0, 3), s.t))   # My MMSI never counts
+            for _ in range(2):
+                s.store.values["ais"].update(self.ais("987654321", *offset(LAT, LON, 45, 80), s.t)); s.run(1, lat=LAT, lon=LON)
+            self.assertNotIn("ais", w.alarms)
+        finally: s.dir.cleanup()
+
+    def test_old_internet_positions_do_not_count(self):
+        s = Sim(); w = s.watch
+        try:
+            class Net:
+                def __init__(self, rows): self.rows = rows
+                def snapshot(self, now=None): return self.rows
+            s.run(2, lat=LAT, lon=LON); w.command({"action": "drop", "mode": "here", "radius": 40})
+            w.command({"action": "settings", "settings": {"min_ais_dist": 25}})
+            la, lo = offset(LAT, LON, 0, 15)
+            w.netais = Net([{"mmsi": "555666777", "lat": la, "lon": lo, "t": s.t - 600, "name": "OLD NEWS"}])   # 10 min old
+            s.run(12, lat=LAT, lon=LON); self.assertNotIn("ais", w.alarms)
+            w.netais = Net([{"mmsi": "555666777", "lat": la, "lon": lo, "t": s.t, "name": "FRESH"}])
+            for _ in range(12): w.netais.rows[0]["t"] = s.t; s.run(1, lat=LAT, lon=LON)
+            self.assertIn("ais", w.alarms)
+        finally: s.dir.cleanup()
 
 
 if __name__ == "__main__":

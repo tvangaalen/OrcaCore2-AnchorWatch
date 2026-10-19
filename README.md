@@ -121,11 +121,12 @@ when the API key is in place), otherwise it alerts after the interval.
   several km; free for non-commercial use with attribution). The PC fetches it every 3 h or when the boat has moved
   5 km, sending only a position rounded to about 1 km, and keeps a 7-day copy in `tide_cache.json` (git-ignored) so it
   also shows offline. Mediterranean tides are small (often 10-20 cm); not for navigation.
-- **Depth next 24 h and chain advice** (in the Tide tile): the lowest and highest depth over the next 24 hours, from
-  the sounder's depth now plus the tide curve, and the chain to let out in whole metres (rounded up):
-  *scope x (highest depth + bow height)*, with *Bow height above water* (default 1.2 m) and *Scope for chain advice*
-  (default 5:1) in Alarm settings. With the sounder switched off, the last reading is used, corrected for the tide
-  since then, but only if it was taken within 150 m (or twice the radius) of the boat's position now.
+- **Depth next 24 h and recommended chain** (in the Tide tile): the lowest and highest water depth over the next 24 h,
+  from the sounder's depth now plus the tide curve, and the recommended chain in whole metres (rounded up) from the
+  *Recommended chain formula* setting. Variables: **D** = deepest water in the next 24 h, **B** = *Bow height above
+  water*, **LOA** = *LOA*; numbers, + - * / (or x) and brackets, e.g. `5*(D+B)` (the default) or `3*D + LOA`. The
+  formula is parsed, never run as code; an invalid one is refused when saving. With the sounder switched off, the last
+  reading is used, corrected for the tide since then, but only within 150 m (or twice the radius) of where it was taken.
 - **Water depth everywhere:** every depth in the app (Depth tile, depth alarm, depth at drop, chain advice, Tide tile)
   is below the waterline: the sounder's reading plus the transducer depth, which the sounder reports itself when it
   can (N2K offset), otherwise the *Transducer below waterline* setting.
@@ -136,7 +137,10 @@ when the API key is in place), otherwise it alerts after the interval.
   the map deletes the recorded track and the max swing and starts afresh; the anchor watch itself carries on.
 - **My MMSI** (Alarm settings): this boat's own AIS is never shown as a target. While it is empty, any target within
   10 m of the GPS is hidden and the page offers it as *Use as My MMSI*.
-- **AIS:** targets within 600 m are drawn on the map; boats within 120 m (or twice the radius) are kept in view.
+- **AIS:** targets within 600 m are drawn on the map; boats within 120 m (or twice the radius) are kept in view. The
+  *AIS closest* tile shows the distance to the nearest target in whole metres. With *Min AIS distance* set (0 = off),
+  a target closer than that for 10 s while anchored raises the "AIS target close" alarm (high-priority push); internet
+  AIS only counts when its report is less than 3 minutes old.
   The *AIS nearby* tile says so when the AIS feed is down.
 - **Internet AIS** (optional, [aisstream.io](https://aisstream.io), free): adds ships the boat's own AIS receiver does
   not see, e.g. with the instruments switched off. **The own receiver always has priority**: an internet report is

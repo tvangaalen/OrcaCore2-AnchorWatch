@@ -4,6 +4,21 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.9 — Chain formula, AIS proximity
+
+### 1.9.0
+- **Recommended chain** (renamed from Chain) now comes from a **formula setting** (`ChainFormula`): D = deepest water in
+  the next 24 h, B = bow height, LOA = the new *LOA* setting; numbers, + - * / (or x, ×), brackets, comma or point
+  decimals, e.g. `3*D + LOA`. Parsed into an expression tree and never executed; invalid formulas are refused with a
+  message. The Tide tile shows the formula with its values under the label (readable on a phone). The old fixed
+  *Scope for chain advice* is converted to `<scope>*(D+B)`.
+- **AIS closest** tile: the distance to the nearest target in whole metres as the main number, with its name, the
+  number within 600 m and the alarm limit.
+- **AIS proximity alarm** (*Min AIS distance*, 0 = off): a target closer than the limit for 10 s while anchored raises
+  "AIS target close" (high-priority push). My MMSI never counts, nor internet AIS older than 3 minutes.
+
+---
+
 ## 1.8 — Water depth and under-keel clearance
 
 ### 1.8.1
