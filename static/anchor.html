@@ -69,7 +69,7 @@ button.on{outline:2px solid var(--accent)}
 .leaflet-control-attribution{background:color-mix(in srgb,var(--panel) 80%,transparent)!important;color:var(--muted)}
 .leaflet-control-attribution a{color:var(--muted)}
 @media (max-width:600px){.leaflet-control-attribution{font-size:9px;max-width:70%;line-height:1.3}.leaflet-bottom.leaflet-left{bottom:14px}}
-.leaflet-control-scale-line{background:color-mix(in srgb,var(--panel) 75%,transparent);color:var(--text);border-color:var(--text)}
+.leaflet-control-scale-line{background:color-mix(in srgb,var(--panel) 75%,transparent);color:var(--text);border-color:var(--text);text-shadow:none}
 .layerbar{position:absolute;left:10px;top:10px;right:62px;z-index:500;display:flex;flex-wrap:wrap;gap:6px;align-items:flex-start;pointer-events:none}
 .lgroup{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel);pointer-events:auto}
 .layerbar button{border:0;border-radius:0;min-height:34px;padding:5px 9px;font-size:13px;background:transparent}
@@ -108,6 +108,12 @@ button.on{outline:2px solid var(--accent)}
 .sun{display:flex;align-items:center;gap:6px}
 .sun svg{flex:none;color:var(--warn)}
 .sun b{font-weight:600;margin-right:10px}
+.tide{display:flex;align-items:center;gap:8px}
+.tide svg.ic{flex:none;color:var(--accent)}
+.tide .spark{flex:1;min-width:60px;height:30px}
+.tide .spark path{fill:none;stroke:var(--accent);stroke-width:1.6}
+.tide .spark line{stroke:var(--muted);stroke-width:1;stroke-dasharray:2 2}
+.tide .spark circle{fill:var(--accent)}
 .tile .s{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -370,7 +376,7 @@ function render(){
       :a&&a.depth!=null?`at drop ${f1(a.depth)} m`:'below transducer'),
     tile('True wind',f0(b.tws),'kn',b.tws==null&&S.settings.max_wind_kn>0?'<span style="color:var(--warn)">no wind data: wind alarm inactive</span>'
       :b.twd!=null?`from ${f0(b.twd)}° ${card(b.twd)}`:''),
-    sunTile(),
+    sunTile(), tideTile(),
     tile('Heading',b.heading!=null?f0(b.heading):'–','°T',''),
     tile('SOG',f1(b.sog),'kn',''),
     tile('GPS',p?(p.hdop!=null&&p.hdop>2?'Poor':'OK'):'Lost','',gpsSub),
@@ -429,10 +435,26 @@ function sunTile(){
   if(!q)return `<div class="tile wide"><div class="l">Sun</div><div class="v">–</div><div class="s">no position</div></div>`;
   const now=new Date(), t=sunTimes(q.lat,q.lon,now);
   if(!t)return `<div class="tile wide"><div class="l">Sun</div><div class="v">–</div><div class="s">no sunrise or sunset today</div></div>`;
-  const next=now<t.rise?['rise',t.rise]:now<t.set?['set',t.set]:null;
+  const tomorrow=now>=t.set?sunTimes(q.lat,q.lon,new Date(+now+864e5)):null;   // after sunset: count down to tomorrow's sunrise
+  const next=now<t.rise?['rise',t.rise]:now<t.set?['set',t.set]:tomorrow?['rise',tomorrow.rise]:null;
   const left=next?Math.round((next[1]-now)/60000):0;
-  const sub=next?`sun${next[0]} in ${left>=60?Math.floor(left/60)+' h '+p2(left%60)+' min':left+' min'}`:'after sunset';
+  const sub=next?`sun${next[0]} in ${left>=60?Math.floor(left/60)+' h '+p2(left%60)+' min':left+' min'}${tomorrow?' (tomorrow '+hm(tomorrow.rise)+')':''}`:'';
   return `<div class="tile wide"><div class="l">Sun</div><div class="v sun">${SUN_UP}<b>${hm(t.rise)}</b>${SUN_DOWN}<b>${hm(t.set)}</b></div><div class="s">${sub}</div></div>`;
+}
+// ---------- tide (server: Open-Meteo marine sea level, hourly, cached on the PC)
+const TIDE_UP='<svg class="ic" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="rising"><path d="M2 17c2.5 0 2.5 2 5 2s2.5-2 5-2 2.5 2 5 2 2.5-2 5-2M12 3v10M8 7l4-4 4 4"/></svg>';
+const TIDE_DOWN='<svg class="ic" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="falling"><path d="M2 17c2.5 0 2.5 2 5 2s2.5-2 5-2 2.5 2 5 2 2.5-2 5-2M12 3v10M8 9l4 4 4-4"/></svg>';
+function tideTile(){
+  const T=S.tide||{};
+  if(!T.available)return `<div class="tile wide"><div class="l">Tide</div><div class="v">–</div><div class="s">${esc(T.error?'no tide data: '+T.error:'no tide data yet')}</div></div>`;
+  const c=T.curve, t0=c[0][0], t1=c[c.length-1][0], hs=c.map(x=>x[1]), lo=Math.min(...hs), hi=Math.max(...hs), W=120, H=30;
+  const X=t=>((t-t0)/(t1-t0))*W, Y=h=>hi>lo?H-2-(h-lo)/(hi-lo)*(H-4):H/2, now=S.time;
+  const path=c.map((p,i)=>`${i?'L':'M'}${X(p[0]).toFixed(1)} ${Y(p[1]).toFixed(1)}`).join('');
+  const spark=`<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><path d="${path}"/><line x1="${X(now)}" x2="${X(now)}" y1="0" y2="${H}"/><circle cx="${X(now)}" cy="${Y(T.level)}" r="2.6"/></svg>`;
+  const nx=T.next.map(e=>`${e.type==='high'?'High':'Low'} ${hm(new Date(e.t*1000))}`).join(' · ');
+  const range=T.range!=null?` · range ${Math.round(T.range*100)} cm`:'';
+  const label=T.trend==='rising'?'Rising':T.trend==='falling'?'Falling':'–';
+  return `<div class="tile wide" title="Open-Meteo marine model, sea level incl. tide and weather; grid point ${T.grid?T.grid.map(v=>(+v).toFixed(2)).join(', '):''}; not for navigation"><div class="l">Tide</div><div class="v tide">${T.trend==='falling'?TIDE_DOWN:TIDE_UP}<span>${label}</span>${spark}</div><div class="s">${nx}${range}${T.error?' · <span style="color:var(--warn)">offline copy</span>':''} · <a href="https://open-meteo.com/" target="_blank" style="color:inherit">Open-Meteo</a></div></div>`;
 }
 function distBig(){return S.distance!=null?`${f0(S.distance)}<small> m</small>`:''}
 // fixed elements, only their text changes, so a tap on the button is never lost to a re-render

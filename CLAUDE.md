@@ -38,7 +38,7 @@ Overview: `README.md`. Release history: `CHANGELOG.md`.
   written agreement, and never decode, convert or commit CM93 / C-MAP or other proprietary chart data.
 - Never colour-invert charts in dark mode (depth-area and light colours carry meaning); dim them instead. Night
   mode may invert, because everything is tinted red there anyway.
-- Never commit `pushover.json` (Pushover keys), `still_alive.json` (ping URL, API key), `aisstream.json` (aisstream.io key), `certs/`, `anchor_state.json`, `tile_cache/`, `captures/` or `recordings/` (all in `.gitignore`).
+- Never commit `pushover.json` (Pushover keys), `still_alive.json` (ping URL, API key), `aisstream.json` (aisstream.io key), `tide_cache.json` (boat area), `certs/`, `anchor_state.json`, `tile_cache/`, `captures/` or `recordings/` (all in `.gitignore`).
   They hold keys, the boat's positions and network captures. Keep real MMSIs and anchorage positions out of tests.
 
 ## Verifying changes

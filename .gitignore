@@ -20,6 +20,8 @@ aisstream.json
 anchor_state.json
 anchor_state.tmp
 tile_cache/
+tide_cache.json
+tide_cache.tmp
 recordings/
 
 # Network captures of the Orca app (contain LAN traffic)

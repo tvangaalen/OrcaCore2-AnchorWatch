@@ -3,7 +3,7 @@
 import tempfile, unittest
 from pathlib import Path
 
-import asyncio, io, json, os, time, urllib.error
+import asyncio, io, json, math, os, time, urllib.error
 from datetime import datetime, timezone
 from unittest import mock
 
@@ -570,6 +570,53 @@ class InternetAISTest(unittest.TestCase):
     def test_loop_backs_off_on_refused_key(self):
         sent, sleeps = self.run_loop([{"error": "Api Key Is Not Valid"}])
         self.assertIn("Api Key Is Not Valid", self.n.last_error); self.assertEqual(sleeps, [300])
+
+
+class TideTest(unittest.TestCase):
+    P = 12.42 * 3600                                            # semidiurnal (M2) period
+
+    def series(self, start=1_000_000, hours=72, amp=0.08, offset=-0.4):
+        # hourly, rounded to cm like the Open-Meteo model; high water at start + k*P
+        return [[start + i * 3600, round(offset + amp * math.cos(2 * math.pi * i * 3600 / self.P), 2)] for i in range(hours)]
+
+    def test_highs_lows_trend_and_range(self):
+        from anchor_watch import tide_summary
+        s = self.series(); start = s[0][0]
+        now = start + 30 * 3600                                 # between high (2P = 24.84 h) and low (2.5P = 31.05 h)
+        r = tide_summary(s, now)
+        self.assertEqual(r["trend"], "falling"); self.assertEqual([e["type"] for e in r["next"]], ["low", "high"])
+        self.assertLess(abs(r["next"][0]["t"] - (start + 2.5 * self.P)), 20 * 60)     # within 20 min of the truth
+        self.assertLess(abs(r["next"][1]["t"] - (start + 3 * self.P)), 20 * 60)
+        self.assertAlmostEqual(r["range"], 0.16, delta=0.02)
+        self.assertAlmostEqual(r["level"], -0.4 + 0.08 * math.cos(2 * math.pi * 30 * 3600 / self.P), delta=0.012)
+        self.assertTrue(all(now - 6 * 3600 <= t <= now + 18 * 3600 for t, _ in r["curve"]))
+        self.assertEqual(tide_summary(s, start + 8 * 3600)["trend"], "rising")         # after the low at 0.5P = 6.2 h
+
+    def test_outside_the_series(self):
+        from anchor_watch import tide_summary
+        s = self.series(); self.assertIsNone(tide_summary(s, s[-1][0] + 1)); self.assertIsNone(tide_summary(s[:3], s[0][0]))
+
+    def test_feed_fetch_cache_and_refresh(self):
+        from anchor_watch import TideFeed
+        d = tempfile.TemporaryDirectory(); f = Path(d.name, "tide.json")
+        try:
+            hours = [datetime(2026, 10, 19, tzinfo=timezone.utc).timestamp() + i * 3600 for i in range(48)]
+            body = {"latitude": 39.0, "longitude": 1.55, "hourly": {
+                "time": [datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M") for t in hours],
+                "sea_level_height_msl": [round(-0.4 + 0.05 * math.sin(i / 2), 2) if i != 7 else None for i in range(48)]}}
+            urls = []
+            def urlopen(req, timeout):
+                urls.append(req.full_url); return io.BytesIO(json.dumps(body).encode())
+            feed = TideFeed(f, lambda: (39.00321, 1.50487))
+            with mock.patch("anchor_watch.urllib.request.urlopen", urlopen): feed.fetch((39.00321, 1.50487), now=hours[10])
+            self.assertIn("latitude=39.00&longitude=1.50", urls[0])                # only a rounded position is sent
+            self.assertEqual(len(feed.data["series"]), 47)                         # the missing hour is skipped
+            again = TideFeed(f, lambda: None)                                      # offline: the cached copy is used
+            self.assertTrue(again.summary(hours[12])["available"]); self.assertEqual(again.data["grid"], [39.0, 1.55])
+            self.assertFalse(feed.due(hours[10] + 600, (39.0032, 1.5049)))
+            self.assertTrue(feed.due(hours[10] + 4 * 3600 + 1, (39.0032, 1.5049)))   # older than 3 h
+            self.assertTrue(feed.due(hours[10] + 600, (39.075, 1.5049)))            # boat moved 8 km
+        finally: d.cleanup()
 
 
 if __name__ == "__main__":

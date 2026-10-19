@@ -115,7 +115,12 @@ when the API key is in place), otherwise it alerts after the interval.
   the map and/or nudge it with the arrow keys (1 m, Shift = 10 m; on the phone the arrow buttons in the bar); the
   circle follows, and nothing changes until *Save* (or Enter). Esc cancels.
 - **Sun:** sunrise and sunset for the boat's position (computed on the page, no internet needed), in 24-hour time,
-  with the time left to the next one.
+  with the time left to the next one (after sunset: to tomorrow's sunrise).
+- **Tide:** rising or falling, the next high and low water, the range and a curve from 6 h back to 18 h ahead. From
+  the [Open-Meteo](https://open-meteo.com/) marine model (sea level including tide and weather, hourly, a grid of
+  several km; free for non-commercial use with attribution). The PC fetches it every 3 h or when the boat has moved
+  5 km, sending only a position rounded to about 1 km, and keeps a 7-day copy in `tide_cache.json` (git-ignored) so it
+  also shows offline. Mediterranean tides are small (often 10-20 cm); not for navigation.
   The rode helper suggests a radius from rode length, depth and bow height.
 - **Track:** the last 24 h (setting *Track kept*) is drawn on the map, older parts fainter. *Start new track* under
   the map deletes the recorded track and the max swing and starts afresh; the anchor watch itself carries on.

@@ -4,6 +4,20 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.6 — Tide
+
+### 1.6.0
+- **Tide tile**: rising/falling with an icon, the next high and low water (24-hour local time), the range in cm and a
+  curve from 6 h back to 18 h ahead with the present level marked. Data: the Open-Meteo marine API's hourly sea level
+  (tide plus weather effects) for the boat's area (`TideFeed`), fetched every 3 h or after the boat moved 5 km with
+  a position rounded to 0.01 degree, and cached for 7 days in `tide_cache.json` so it works offline. High and low
+  water are found on the 3-hour-smoothed series and refined with a parabola (tested within 20 min on a cm-rounded
+  M2 tide). Attribution "Open-Meteo" in the tile.
+- **Sun tile** counts down to tomorrow's sunrise after sunset.
+- **Night mode: the map's scale bar** no longer has Leaflet's white text shadow, so it is dark red like the rest.
+
+---
+
 ## 1.5 — Sun times, precise anchor moves
 
 ### 1.5.1

@@ -34,7 +34,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.5.1"
+VERSION = "1.6.0"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -297,6 +297,96 @@ class InternetAIS:
             delay = 5 if got else min(delay * 2, 120)
 
 
+# ---------------------------------------------------------------- tide (Open-Meteo marine sea level)
+
+
+def tide_summary(series, now):
+    """Level now, rising/falling, the next high and low waters and a curve, from an hourly sea-level series.
+
+    series: [[unix time, metres], ...] (hourly). The model gives centimetres, so the series is smoothed over three
+    hours before looking for turning points, and each turning point is refined with a parabola through its
+    neighbours. Returns None outside the series.
+    """
+    if len(series) < 6 or not (series[0][0] <= now <= series[-1][0]): return None
+    ts = [t for t, _ in series]; hs = [h for _, h in series]
+    sm = [hs[0]] + [(hs[i - 1] + hs[i] + hs[i + 1]) / 3 for i in range(1, len(hs) - 1)] + [hs[-1]]
+    ext = []
+    for i in range(1, len(sm) - 1):
+        a, b, c = sm[i - 1], sm[i], sm[i + 1]
+        if not ((b > a and b >= c) or (b < a and b <= c)): continue
+        den = a - 2 * b + c; off = max(-1.0, min(1.0, 0.5 * (a - c) / den)) if den else 0.0
+        t = ts[i] + off * (ts[i + 1] - ts[i]); h = b - 0.25 * (a - c) * off
+        kind = "high" if b > a else "low"
+        if ext and ext[-1]["type"] == kind:                     # same kind twice (plateau): keep the more extreme
+            if (kind == "high") == (h > ext[-1]["h"]): ext[-1] = {"type": kind, "t": t, "h": h}
+            continue
+        ext.append({"type": kind, "t": t, "h": h})
+    i = next(k for k in range(len(ts) - 1) if ts[k] <= now <= ts[k + 1])
+    f = (now - ts[i]) / (ts[i + 1] - ts[i]); level = hs[i] + f * (hs[i + 1] - hs[i])
+    nxt = [e for e in ext if e["t"] > now][:2]
+    prev = [e for e in ext if e["t"] <= now][-1:]
+    trend = ("rising" if nxt[0]["type"] == "high" else "falling") if nxt else None
+    span = [e["h"] for e in prev + nxt[:1]]
+    return {"level": round(level, 3), "trend": trend,
+            "next": [{"type": e["type"], "t": round(e["t"]), "h": round(e["h"], 3)} for e in nxt],
+            "range": round(abs(span[0] - span[1]), 3) if len(span) == 2 else None,
+            "curve": [[t, h] for t, h in series if now - 6 * 3600 <= t <= now + 18 * 3600]}
+
+
+class TideFeed:
+    """Hourly sea level (tide plus weather effects) for the boat's area from the Open-Meteo marine API, free for
+    non-commercial use (attribution: Open-Meteo.com). Refreshed every REFRESH_S or after the boat moved MOVE_M, and
+    kept in a local cache file so the tide still shows without internet. Only a position rounded to 0.01 degree
+    (about 1 km) is sent. A model value on a grid of several km, not a tide-gauge reading; not for navigation.
+    """
+    URL = ("https://marine-api.open-meteo.com/v1/marine?latitude={lat:.2f}&longitude={lon:.2f}"
+           "&hourly=sea_level_height_msl&timezone=UTC&past_days=1&forecast_days=7&cell_selection=sea")
+    REFRESH_S, MOVE_M, RETRY_S = 3 * 3600, 5000, 600
+
+    def __init__(self, cache_file, center, on_event=None):
+        self.cache_file, self.center = Path(cache_file), center
+        self.on_event = on_event or (lambda text, kind: None)
+        self.data = None; self.last_error = None; self.next_try = 0.0
+        try: self.data = json.loads(self.cache_file.read_text(encoding="utf-8"))
+        except Exception: pass
+
+    def due(self, now, c):
+        d = self.data
+        return (not d or now - d.get("fetched", 0) > self.REFRESH_S or not d.get("series") or now > d["series"][-1][0] - 86400
+                or dist_bearing_m(d["lat"], d["lon"], *c)[0] > self.MOVE_M)
+
+    def fetch(self, c, now=None):
+        now = now or time.time()
+        req = urllib.request.Request(self.URL.format(lat=c[0], lon=c[1]), headers={"User-Agent": f"OrcaCore2-AnchorWatch/{VERSION}"})
+        with urllib.request.urlopen(req, timeout=20) as r: d = json.loads(r.read())
+        h = d.get("hourly") or {}
+        series = [[int(datetime.strptime(t, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc).timestamp()), v]
+                  for t, v in zip(h.get("time", []), h.get("sea_level_height_msl", [])) if num(v)]
+        if len(series) < 24: raise ValueError("no sea-level data for this position")
+        self.data = {"fetched": now, "lat": c[0], "lon": c[1], "grid": [d.get("latitude"), d.get("longitude")], "series": series}
+        tmp = self.cache_file.with_suffix(".tmp"); tmp.write_text(json.dumps(self.data), encoding="utf-8"); os.replace(tmp, self.cache_file)
+
+    def summary(self, now=None):
+        now = now or time.time()
+        if not self.data: return {"available": False, "error": self.last_error}
+        s = tide_summary(self.data["series"], now)
+        if not s: return {"available": False, "error": self.last_error or "tide data out of date"}
+        return {"available": True, **s, "fetched": self.data["fetched"], "grid": self.data.get("grid"), "error": self.last_error}
+
+    async def run(self):
+        while True:
+            now = time.time(); c = self.center()
+            if c and now >= self.next_try and self.due(now, c):
+                try:
+                    await asyncio.to_thread(self.fetch, c)
+                    if self.last_error: self.on_event("Tide data available again", "ok")
+                    self.last_error = None
+                except Exception as e:
+                    if not self.last_error: self.on_event(f"Tide data not updated: {type(e).__name__}: {e}", "warn")
+                    self.last_error = f"{type(e).__name__}: {e}"; self.next_try = now + self.RETRY_S
+            await asyncio.sleep(60 if self.data else 5)      # at start-up the boat's position comes a moment later
+
+
 # ---------------------------------------------------------------- push alerts (Pushover)
 
 
@@ -531,6 +621,7 @@ class AnchorWatch:
         self.notifier = None               # Pushover, set by main() (tests use a fake)
         self.alive = None                  # StillAlive, set by main()
         self.netais = None                 # InternetAIS, set by main()
+        self.tide = None                   # TideFeed, set by main()
         self.load()
 
     # ---- persistence
@@ -752,6 +843,7 @@ class AnchorWatch:
                           "last_message": n.last_message if n else None, "last_error": n.last_error if n else None,
                           "ships": len(net) if net is not None else 0}
         out["own_candidate"] = min(near_us, key=lambda t: t["dist"]) if near_us else None
+        out["tide"] = self.tide.summary(now) if self.tide is not None else {"available": False}
         return out
 
     def track_since(self, t, gen):
@@ -930,6 +1022,7 @@ def main():
     ap.add_argument("--pushover", default=str(HERE / "pushover.json"), help="Pushover keys file (see pushover.example.json)")
     ap.add_argument("--still-alive", default=str(HERE / "still_alive.json"), help="still-alive ping config (see still_alive.example.json)")
     ap.add_argument("--aisstream", default=str(HERE / "aisstream.json"), help="aisstream.io key for internet AIS (see aisstream.example.json)")
+    ap.add_argument("--tide-cache", default=str(HERE / "tide_cache.json"), help="local copy of the tide forecast (works offline)")
     a = ap.parse_args()
     check_bind(a.bind)
     if bool(a.certfile) != bool(a.keyfile): ap.error("--certfile and --keyfile go together")
@@ -945,6 +1038,7 @@ def main():
         pos = watch.boat.get("pos") or watch.anchor
         return (pos["lat"], pos["lon"]) if pos else None
     watch.netais = InternetAIS(a.aisstream, boat_center, lambda: watch.settings["internet_ais"], on_event=lambda text, kind: watch.event(text, kind=kind))
+    watch.tide = TideFeed(a.tide_cache, boat_center, on_event=lambda text, kind: watch.event(text, kind=kind))
     log.info("Internet AIS: %s", "aisstream.io ready" if watch.netais.configured else f"off ({Path(a.aisstream).name} missing or invalid)")
     server = Server((a.bind, a.port), make_handler(watch, TileCache(a.tile_cache)))
     scheme = "http"
@@ -959,7 +1053,7 @@ def main():
 
     async def run():
         tasks = [stream_loop(store, "sensors", f"ws://{a.host}:8089" + SENSORS_PATH.format(ms=1000), None), watch_loop(watch),
-                 devices_loop(store, a.host), watch.netais.run()]
+                 devices_loop(store, a.host), watch.netais.run(), watch.tide.run()]
         if not a.no_ais: tasks.append(stream_loop(store, "ais", f"ws://{a.host}:8089" + AIS_PATH, None))
         await asyncio.gather(*tasks)
     try: asyncio.run(run())
