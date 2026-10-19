@@ -6,6 +6,13 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ## 1.10 — Settings screen
 
+### 1.10.2
+- Tide tile: **Minimum chain** instead of Recommended chain (setting: *Minimum chain formula*); the formula line under
+  it is gone (hover the label to see it).
+- The **GPS tile is gone**: its status is now a badge in the Position tile — green *GPS OK*, amber *GPS poor*
+  (HDOP above 2) or red *No GPS* with the time since the last fix; source, satellites and HDOP below the position.
+- Tile order: AIS and SOG now follow True wind.
+
 ### 1.10.1
 - **The log no longer fills up with unchanged settings.** *Save settings* sends every field; each save re-synced the
   still-alive period on healthchecks.io and logged "Still-alive check on healthchecks.io set to 30 min" plus

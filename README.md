@@ -131,9 +131,9 @@ when the API key is in place), otherwise it alerts after the interval.
   several km; free for non-commercial use with attribution). The PC fetches it every 3 h or when the boat has moved
   5 km, sending only a position rounded to about 1 km, and keeps a 7-day copy in `tide_cache.json` (git-ignored) so it
   also shows offline. Mediterranean tides are small (often 10-20 cm); not for navigation.
-- **Depth next 24 h and recommended chain** (in the Tide tile): the lowest and highest water depth over the next 24 h,
-  from the sounder's depth now plus the tide curve, and the recommended chain in whole metres (rounded up) from the
-  *Recommended chain formula* setting. Variables: **D** = deepest water in the next 24 h, **B** = *Bow height above
+- **Depth next 24 h and minimum chain** (in the Tide tile): the lowest and highest water depth over the next 24 h,
+  from the sounder's depth now plus the tide curve, and the minimum chain in whole metres (rounded up) from the
+  *Minimum chain formula* setting. Variables: **D** = deepest water in the next 24 h, **B** = *Bow height above
   water*, **LOA** = *LOA*; numbers, + - * / (or x) and brackets, e.g. `5*(D+B)` (the default) or `3*D + LOA`. The
   formula is parsed, never run as code; an invalid one is refused when saving. With the sounder switched off, the last
   reading is used, corrected for the tide since then, but only within 150 m (or twice the radius) of where it was taken.

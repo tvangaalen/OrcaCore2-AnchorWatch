@@ -120,6 +120,10 @@ button.on{outline:2px solid var(--accent)}
 .tile .v small{font-size:13px;color:var(--muted);font-weight:400;margin-left:2px}
 .tile.wide{grid-column:span 2}
 .tile.full{grid-column:1/-1}
+.gpsb{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;padding:2px 8px;border-radius:10px;white-space:nowrap}
+.gpsb.ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 15%,transparent)}
+.gpsb.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 18%,transparent)}
+.gpsb.bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 18%,transparent)}
 .tile .v.pos{font-size:18px;line-height:1.35;font-variant-numeric:tabular-nums}
 .sun{display:flex;align-items:center;gap:6px}
 .sun svg{flex:none;color:var(--warn)}
@@ -326,7 +330,7 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
           <label class="f">Position format<select data-s="pos_format"><option value="dmm">12° 34.567′ N (degrees, minutes)</option><option value="dms">12° 34′ 34.0″ N (deg, min, sec)</option><option value="dd">12.57612° N (decimal degrees)</option></select></label>
         </div>
         <div class="row">
-          <label class="f">Recommended chain formula<input type="text" data-s="chain_formula" placeholder="5*(D+B)" autocomplete="off" spellcheck="false"></label>
+          <label class="f">Minimum chain formula<input type="text" data-s="chain_formula" placeholder="5*(D+B)" autocomplete="off" spellcheck="false"></label>
         </div>
         <div class="note" style="margin-top:4px">D = max water depth next 24 h, B = bow height, LOA. Numbers, + − * / (or x) and brackets, e.g. <b>3*D + LOA</b> or <b>5*(D+B)</b>. Rounded up to whole metres.</div>
         <div class="row">
@@ -449,7 +453,6 @@ function render(){
   scope();
 
   // tiles
-  const gpsSub=p?`src ${p.source}${p.source==='254'?' (Orca Core)':''} · ${p.sats!=null?p.sats+' sats':''}${p.hdop!=null?' · HDOP '+p.hdop:''}`:`no fix · ${ago(S.gps_age)} ago`;
   $('tiles').innerHTML=[
     a?tile('From anchor',S.distance!=null?f0(S.distance):'–','m',S.bearing!=null?`bearing ${f0(S.bearing)}° ${card(S.bearing)}`:''):'',
     a?tile('Max swing',f0(S.max_dist),'m',`limit ${f0(a.radius)} m`):'',
@@ -457,14 +460,13 @@ function render(){
       :a&&a.depth!=null?`water depth · at drop ${f2(a.depth)} m`:'water depth'),
     tile('True wind',f0(b.tws),'kn',b.tws==null&&S.settings.max_wind_kn>0?'<span style="color:var(--warn)">no wind data: wind alarm inactive</span>'
       :b.twd!=null?`from ${f0(b.twd)}° ${card(b.twd)}`:''),
-    sunTile(), positionTile(),
-    tile('Heading',b.heading!=null?f0(b.heading):'–','°T',''),
-    tile('SOG',f1(b.sog),'kn',''),
-    tile('GPS',p?(p.hdop!=null&&p.hdop>2?'Poor':'OK'):'Lost','',gpsSub),
     aisDown()&&!netOk()?tile('AIS nearby','–','',`<span style="color:var(--warn)">AIS feed down · ${S.ais_stream.last_message_age!=null?'last data '+ago(S.ais_stream.last_message_age)+' ago':'no data yet'}</span>`)
       :tile('AIS closest',S.ais[0]?f0(S.ais[0].dist):'–',S.ais[0]?'m':'',(S.ais[0]?`${esc(S.ais[0].name||S.ais[0].mmsi)} · ${S.ais.length} within 600 m`:'none within 600 m')
         +(S.settings.min_ais_dist>0?` · alarm < ${f0(S.settings.min_ais_dist)} m`:'')
         +(nNet()?` · ${nNet()} internet`:'')+(aisDown()?' · <span style="color:var(--warn)">local feed down</span>':'')),
+    tile('SOG',f1(b.sog),'kn',''),
+    sunTile(), positionTile(),
+    tile('Heading',b.heading!=null?f0(b.heading):'–','°T',''),
       tideTile(),
   ].join('');
   $('log').innerHTML=S.events.slice().reverse().map(e=>`<div><span class="t">${clock(e.t)}</span><span class="${e.kind}">${esc(e.text)}</span></div>`).join('')||'<div class="note">Nothing yet.</div>';
@@ -561,12 +563,12 @@ function tideTile(){
   const ref='';
   const from=!dp?'':P.source==='sounder'?'from sounder':`from last reading ${dayTime(P.reading_t)}, tide-corrected`;
   const head=dp?`now ${f2(P.now)} m${ref}`:'sea level';
-  const chip=dp?`<span class="chip" title="${esc(P.formula)} with D ${f2(P.max)} m (deepest in 24 h), B ${f2(P.bow_height)} m, LOA ${f2(P.loa)} m, rounded up">Recommended chain ${P.chain} m</span>`:'';
+  const chip=dp?`<span class="chip" title="${esc(P.formula)} with D ${f2(P.max)} m (deepest in 24 h), B ${f2(P.bow_height)} m, LOA ${f2(P.loa)} m, rounded up">Minimum chain ${P.chain} m</span>`:'';
   const why=dp?'':`<div class="s" style="color:var(--warn)">No depth for the chart: ${esc(P.reason||'no depth reading')}</div>`;
   return `<div class="tile full" title="Marine model sea level incl. tide and weather; grid point ${T.grid?T.grid.map(v=>(+v).toFixed(2)).join(', '):''}; not for navigation">`
     +`<div class="thead"><span class="l">Tide${dp?' · depth next 24 h':''}</span><b>${head}</b></div>${chart}`
     +`<div class="trow"><span class="trend">${T.trend==='falling'?TIDE_DOWN:TIDE_UP}${label}<small>${range}</small></span>${chip}</div>${why}`
-    +`${dp?`<div class="s" style="text-align:right">${esc(P.formula)} · D ${f2(P.max)} · B ${f2(P.bow_height)} · LOA ${f2(P.loa)}</div>`:''}${dp?keelBar(P):''}<div class="s">${from?esc(from)+' · ':''}${T.error?'<span style="color:var(--warn)">offline copy</span>':''}</div></div>`;
+    +`${dp?keelBar(P):''}<div class="s">${from?esc(from)+' · ':''}${T.error?'<span style="color:var(--warn)">offline copy</span>':''}</div></div>`;
 }
 // clearance under the keel at the shallowest moment of the next 24 h: draught and clearance as one bar, scaled to the depth
 function keelBar(P){
@@ -591,11 +593,18 @@ function fmtPos(lat,lon,f){
   };
   return [one(lat,'N','S',2),one(lon,'E','W',3)];
 }
+// GPS status as a badge: OK (green), poor (amber: HDOP above 2) or lost (red, with the time since the last fix)
+const SAT='<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4M17 11l4 4-4 4-4-4M8 12l4 4 6-6-4-4-6 6M16 8l3-3M9 21a6 6 0 0 0-6-6"/></svg>';
+function gpsBadge(p){
+  if(!p)return `<span class="gpsb bad" title="No usable GPS position">${SAT}No GPS${S.gps_age!=null?' · '+ago(S.gps_age):''}</span>`;
+  const poor=p.hdop!=null&&p.hdop>2;
+  return `<span class="gpsb ${poor?'warn':'ok'}" title="GPS ${esc(p.source)}${p.source==='254'?' (Orca Core)':''}${p.sats!=null?', '+p.sats+' satellites':''}${p.hdop!=null?', HDOP '+p.hdop:''}">${SAT}${poor?'GPS poor':'GPS OK'}</span>`;
+}
 function positionTile(){
-  const p=S.boat.pos;
-  if(!p)return `<div class="tile wide"><div class="l">Position</div><div class="v">–</div><div class="s">no GPS position</div></div>`;
+  const p=S.boat.pos, head=`<div class="thead"><span class="l">Position</span>${gpsBadge(p)}</div>`;
+  if(!p)return `<div class="tile wide">${head}<div class="v">–</div><div class="s">no GPS position</div></div>`;
   const [la,lo]=fmtPos(p.lat,p.lon,S.settings.pos_format||'dmm');
-  return `<div class="tile wide"><div class="l">Position</div><div class="v pos">${la}<br>${lo}</div><div class="s">GPS ${esc(p.source)}${p.source==='254'?' (Orca Core)':''}${p.sats!=null?' · '+p.sats+' sats':''}</div></div>`;
+  return `<div class="tile wide">${head}<div class="v pos">${la}<br>${lo}</div><div class="s">GPS ${esc(p.source)}${p.source==='254'?' (Orca Core)':''}${p.sats!=null?' · '+p.sats+' sats':''}${p.hdop!=null?' · HDOP '+p.hdop:''}</div></div>`;
 }
 function distBig(){return S.distance!=null?`${f0(S.distance)}<small> m</small>`:''}
 // fixed elements, only their text changes, so a tap on the button is never lost to a re-render
