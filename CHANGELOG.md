@@ -6,6 +6,14 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ## 1.10 — Settings screen
 
+### 1.10.3
+- **Orca Core alone: no more "frozen" GPS loss while its own fix is live.** Every source sends two positions:
+  `navigation.position` (used normally) and the receiver's own fix `navigation.gnss`. When the first one has not
+  changed for 60 s but the own fix still changes, the own fix is used (GPS list: *own GNSS fix*). A source is only
+  treated as frozen when both are unchanged, so a frozen value still never hides a drag.
+- While a source is held, its GPS values are recorded for 10 min to `recordings/gps_held_<source>_<time>.jsonl`
+  (local only, git-ignored), so the cause can be checked if the GPS still freezes.
+
 ### 1.10.2
 - Tide tile: **Minimum chain** instead of Recommended chain (setting: *Minimum chain formula*); the formula line under
   it is gone (hover the label to see it).

@@ -167,7 +167,11 @@ when the API key is in place), otherwise it alerts after the interval.
 - **Frozen-position check:** the Core's position is not always live while it flags the boat as stationary (on
   2026-10-12, with the other receivers on, it stayed at one exact value for minutes; on 2026-10-16, Core alone, it
   kept moving). A frozen position would hide a slow drag, so any GPS whose position has not changed at all for 60 s
-  is skipped and logged; real receivers always jitter in the last digit. With no usable GPS left, the GPS alarm goes off.
+  is skipped and logged; real receivers always jitter in the last digit. Each source sends two positions: the normal
+  one and the receiver's own GNSS fix (`navigation.gnss`). If the normal one is held but the own fix still changes,
+  the own fix is used (shown as *own GNSS fix* in the GPS list); only when both are held is the source frozen. With no
+  usable GPS left, the GPS alarm goes off. While a source is held, its GPS values are recorded for 10 min to
+  `recordings/gps_held_*.jsonl` (local only, git-ignored), to find out why it held.
 - With the instruments off there is no depth or wind; the tiles then say that the depth or wind alarm is inactive.
 - Anchor, settings, track and log are kept in `anchor_state.json`, so a restart resumes the watch.
 

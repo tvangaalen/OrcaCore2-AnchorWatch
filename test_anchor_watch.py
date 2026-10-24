@@ -117,6 +117,42 @@ class AnchorWatchTest(unittest.TestCase):
         self.assertTrue(names["254"]["in_use"]); self.assertEqual(names["254"]["name"], "254 (Orca Core 2)")
         self.assertEqual(self.w.state()["gps_default"], "4,127,3,254")
 
+    def core_held(self, lat, lon):
+        # Core alone, navigation.position.254 held on one value; its own GNSS fix (navigation.gnss.254) still changes
+        self.s.put(navigation__position__254__latitude=LAT, navigation__position__254__longitude=LON,
+                   navigation__gnss__254__latitude=lat + (int(self.s.t) % 3) * 1e-7, navigation__gnss__254__longitude=lon,
+                   navigation__gnss__254__method=2, navigation__motion__254__stationary=1)
+
+    def test_core_alone_held_position_uses_its_own_gnss_fix(self):
+        self.w.command({"action": "settings", "settings": {"gps_sources": "254,4,127,3"}})
+        self.s.t += 11
+        for _ in range(70): self.core_held(LAT, LON); self.w.tick(self.s.t); self.s.t += 1
+        self.assertEqual(self.w.boat["pos"]["source"], "254"); self.assertTrue(self.w.boat["pos"]["raw"])
+        self.assertEqual(self.w.frozen, set()); self.assertEqual(self.w.raw, {"254"})
+        self.assertTrue(any("own GNSS fix still changes" in e["text"] for e in self.w.events))
+        lat, lon = offset(LAT, LON, 0, 50)                  # a drag shows although navigation.position stays held
+        for _ in range(11): self.core_held(lat, lon); self.w.tick(self.s.t); self.s.t += 1
+        self.assertIn("drag", self.w.alarms); self.assertNotIn("gps", self.w.alarms)
+
+    def test_core_alone_frozen_when_its_own_fix_is_held_too(self):
+        self.s.t += 11
+        for _ in range(62):
+            self.s.put(navigation__position__254__latitude=LAT, navigation__position__254__longitude=LON,
+                       navigation__gnss__254__latitude=LAT, navigation__gnss__254__longitude=LON, navigation__gnss__254__method=2)
+            self.w.tick(self.s.t); self.s.t += 1
+        self.assertIsNone(self.w.boat["pos"]); self.assertIn("254", self.w.frozen); self.assertEqual(self.w.raw, set())
+        self.assertTrue(any("(position and own GNSS fix)" in e["text"] for e in self.w.events))
+
+    def test_held_source_values_are_recorded(self):
+        d = tempfile.TemporaryDirectory()
+        try:
+            self.w.diag_dir = Path(d.name); self.s.t += 11
+            for _ in range(65): self.core_held(LAT, LON); self.w.tick(self.s.t); self.s.t += 1
+            files = list(Path(d.name).glob("gps_held_254_*.jsonl")); self.assertEqual(len(files), 1)
+            rows = [json.loads(x) for x in files[0].read_text(encoding="utf-8").splitlines()]
+            self.assertGreaterEqual(len(rows), 4); self.assertIn("navigation.gnss.254.latitude", rows[-1]["values"])
+        finally: d.cleanup()
+
     def test_frozen_raw_receiver_fails_over_and_recovers(self):
         for _ in range(62):                                 # source 4 stuck on one value, 127 alive
             self.s.put(navigation__position__4__latitude=LAT, navigation__position__4__longitude=LON, navigation__gnss__4__method=1)
