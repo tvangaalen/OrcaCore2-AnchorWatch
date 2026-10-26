@@ -165,6 +165,20 @@ class AnchorWatchTest(unittest.TestCase):
             self.core_static_hold(*offset(LAT, LON, 0, 3 + i * 0.5)); self.w.tick(self.s.t); self.s.t += 1
         self.assertIn("drag", self.w.alarms)
 
+    def test_live_receiver_is_preferred_over_held_core(self):
+        self.w.command({"action": "settings", "settings": {"gps_sources": "254,4,127,3"}})
+        n = len(self.w.events)
+        for i in range(90):                                 # 254 on hold, B&G (4) live: the smooth one is used
+            self.core_static_hold(*offset(LAT, LON, 0, 3)); self.s.boat(*offset(LAT, LON, 0, 3), frozen=False)
+            self.w.tick(self.s.t); self.s.t += 1
+        self.assertEqual(self.w.hold, {"254"}); self.assertEqual(self.w.boat["pos"]["source"], "4")
+        self.core_held_release = offset(LAT, LON, 0, 15)    # hold released: 254 moves again and is used again
+        for _ in range(3):
+            self.core_static_hold(*self.core_held_release); self.s.boat(*self.core_held_release, frozen=False)
+            self.w.tick(self.s.t); self.s.t += 1
+        self.assertEqual(self.w.boat["pos"]["source"], "254")
+        self.assertEqual(sum("Position source now" in e["text"] for e in list(self.w.events)[n:]), 1)   # only the switch to 254 at the start
+
     def test_core_hold_without_new_fixes_is_frozen(self):
         self.s.t += 11
         self.core_static_hold(LAT, LON)

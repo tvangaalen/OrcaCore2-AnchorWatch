@@ -18,7 +18,8 @@ is held but the source's own fix still changes, that fix is used instead; only w
 frozen. The Core's own GPS is the exception: it has a static hold. Recordings of 2026-10-26 show it keeps one fix
 (position and own fix alike) for up to 10 min while the boat lies still, and moves on as soon as the real position
 is about 10 m away (every release jumped 10.0-10.1 m). While its receiver is alive (the fix time keeps advancing)
-such a held 254 position is used, marked "hold": it is never more than about HOLD_M off. While a source is held, its GPS values are written to recordings/ (local only, never committed) for analysis.
+such a held 254 position is used, marked "hold": it is never more than about HOLD_M off. A live receiver is
+preferred over a held 254, whatever the order, so with the instruments on the track stays smooth. While a source is held, its GPS values are written to recordings/ (local only, never committed) for analysis.
 
 State (anchor, settings, track, events) is kept in anchor_state.json so a restart does not lose the watch.
 
@@ -40,7 +41,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.11.0"
+VERSION = "1.11.1"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -123,10 +124,11 @@ def position_sources(sensors, now, kind="position"):
     return out
 
 
-def read_boat(sensors, now, sources_pref, frozen=frozenset(), transducer_depth=0.0, raw=frozenset()):
+def read_boat(sensors, now, sources_pref, frozen=frozenset(), transducer_depth=0.0, raw=frozenset(), hold=frozenset()):
     """Pick the position and the other values the watch needs from the Store's sensor map (key -> (value, t)).
     Sources in `frozen` (position unchanged for FROZEN_S) are skipped; for sources in `raw` (navigation.position
-    held, own fix still changing) the receiver's own fix is used."""
+    held, own fix still changing) the receiver's own fix is used. Sources in `hold` (254 on static hold, within
+    HOLD_M) are used only when no live source is left."""
     def val(k):
         v = sensors.get(k); return (v[0], now - v[1]) if v and num(v[0]) else (None, None)
 
@@ -134,6 +136,7 @@ def read_boat(sensors, now, sources_pref, frozen=frozenset(), transducer_depth=0
     if raw: cands.update({s: c for s, c in position_sources(sensors, now, "gnss").items() if s in raw})
     cands = {s: c for s, c in cands.items() if s not in frozen}
     order = list(sources_pref) + sorted((s for s in cands if s not in sources_pref), key=lambda s: cands[s]["age"])
+    order = [s for s in order if s not in hold] + [s for s in order if s in hold]
     pos = next((dict(cands[s]) for s in order if s in cands and cands[s]["age"] <= FRESH_S), None)
 
     def first(keys):
@@ -734,7 +737,7 @@ class AnchorWatch:
         self.raw = set()                   # sources whose navigation.position is held, own fix used instead
         self.hold = set()                  # the Core's GPS on static hold: still used (within HOLD_M)
         self.dt_seen = {}                  # source -> (fix time, time it last changed): is the receiver still alive?
-        self.hold_logged = None
+        self.hold_logged = None; self.hold_was = set()
         self.lock = threading.RLock()
         self.settings = dict(DEFAULTS)
         self.anchor = None                 # {"lat", "lon", "radius", "set_at"}
@@ -825,8 +828,9 @@ class AnchorWatch:
             if self.diag_dir:
                 for src in (frozen | raw) - set(self.diag): self.start_diag(src, now)
                 self.record_diag(sensors, now)
+            self.hold_was = self.hold
             self.frozen, self.raw, self.hold = frozen, raw, hold
-            boat = read_boat(sensors, now, prefs, frozen, float(s["transducer_depth"]), raw); self.boat = boat; pos = boat["pos"]
+            boat = read_boat(sensors, now, prefs, frozen, float(s["transducer_depth"]), raw, hold); self.boat = boat; pos = boat["pos"]
             if pos: pos["hold"] = pos["source"] in hold
             if boat["depth"] is not None:
                 if not self.last_depth or now - self.last_depth["t"] >= 60: self.dirty = True       # persisted about once a minute
@@ -838,7 +842,9 @@ class AnchorWatch:
             if pos:
                 self.last_pos_t = now
                 if pos["source"] != self.last_source:
-                    if self.last_source is not None: self.event(f"Position source now {self.source_name(pos['source'])}", now, "warn")
+                    # switches caused by the 254 hold come and go every few minutes: the hold message covers them
+                    if self.last_source is not None and CORE_SOURCE not in hold and not (pos["source"] == CORE_SOURCE and CORE_SOURCE in self.hold_was):
+                        self.event(f"Position source now {self.source_name(pos['source'])}", now, "warn")
                     self.last_source = pos["source"]
                 if not self.track or now - self.track[-1][0] >= TRACK_EVERY_S:
                     self.track.append([round(now, 1), round(pos["lat"], 7), round(pos["lon"], 7)]); self.dirty = True

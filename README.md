@@ -173,7 +173,8 @@ when the API key is in place), otherwise it alerts after the interval.
   The Core's own GPS (254) is the exception: it has a **static hold**. Recordings of 2026-10-26 show it keeps one fix
   for up to 10 min while the boat lies still and moves it on as soon as the boat is about 10 m away (every release
   jumped 10.0-10.1 m). While its receiver keeps producing fixes, a held 254 position stays in use, shown as
-  *GPS hold* in the Position tile: it is within about 10 m, so a drag shows at the latest about 10 m later. With no
+  *GPS hold* in the Position tile: it is within about 10 m, so a drag shows at the latest about 10 m later.
+  A live receiver is preferred over a held 254, so with the instruments on the track stays smooth. With no
   usable GPS left, the GPS alarm goes off. While a source is held, its GPS values are recorded for 10 min to
   `recordings/gps_held_*.jsonl` (local only, git-ignored), to find out why it held.
 - With the instruments off there is no depth or wind; the tiles then say that the depth or wind alarm is inactive.
