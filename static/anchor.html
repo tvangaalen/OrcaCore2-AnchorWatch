@@ -346,7 +346,7 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
           <label class="f">GPS sources, in order (advanced)<input type="text" data-s="gps_sources"></label>
           <label class="f">Track kept (h)<input type="number" data-s="track_hours" min="1" max="72"></label>
         </div>
-        <p class="note">Sources are tried in this order, the next one takes over when a GPS stops. 254 is the Orca Core's own GPS. A GPS whose position has not changed for 60 s uses its own GNSS fix while that still changes; if that has not changed either it counts as frozen and is skipped.</p>
+        <p class="note">Sources are tried in this order, the next one takes over when a GPS stops. 254 is the Orca Core's own GPS. A GPS whose position has not changed for 60 s uses its own GNSS fix while that still changes; if that has not changed either it counts as frozen and is skipped. Exception: the Orca Core (254) keeps its fix while the boat lies still and moves it on after about 10 m; it stays in use (shown as hold), within about 10 m.</p>
     </section>
     <section class="card credits" id="credits">
       <h3>Credits</h3>
@@ -597,6 +597,7 @@ function fmtPos(lat,lon,f){
 const SAT='<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4M17 11l4 4-4 4-4-4M8 12l4 4 6-6-4-4-6 6M16 8l3-3M9 21a6 6 0 0 0-6-6"/></svg>';
 function gpsBadge(p){
   if(!p)return `<span class="gpsb bad" title="No usable GPS position">${SAT}No GPS${S.gps_age!=null?' · '+ago(S.gps_age):''}</span>`;
+  if(p.hold)return `<span class="gpsb warn" title="The Orca Core keeps its fix while the boat lies still and moves it on after about 10 m: position within about 10 m">${SAT}GPS hold</span>`;
   const poor=p.hdop!=null&&p.hdop>2;
   return `<span class="gpsb ${poor?'warn':'ok'}" title="GPS ${esc(p.source)}${p.source==='254'?' (Orca Core)':''}${p.sats!=null?', '+p.sats+' satellites':''}${p.hdop!=null?', HDOP '+p.hdop:''}">${SAT}${poor?'GPS poor':'GPS OK'}</span>`;
 }
@@ -752,7 +753,7 @@ function renderGps(){
   for(const s of S.gps_default.split(','))if(!known.has(s))known.set(s,{source:s,name:s==='254'?'254 (Orca Core 2)':s,missing:true});
   const opt=(v,txt)=>`<option value="${esc(v)}"${v===first?' selected':''}>${esc(txt)}</option>`;
   const html=opt('auto',`Automatic (${S.gps_default.replaceAll(',',' → ')})`)+[...known.values()].map(g=>opt(g.source,
-    `${g.name}${g.missing?' – not seen':g.frozen?' – frozen':g.raw?' – own GNSS fix':g.sats!=null?` – ${g.sats} sats`:''}${g.source==='254'?' · own GPS of the Core':''}`)).join('')
+    `${g.name}${g.missing?' – not seen':g.frozen?' – frozen':g.hold?' – hold (within 10 m)':g.raw?' – own GNSS fix':g.sats!=null?` – ${g.sats} sats`:''}${g.source==='254'?' · own GPS of the Core':''}`)).join('')
     +(first!=='auto'&&!known.has(first)?opt(first,first+' – not seen'):'');
   if(document.activeElement!==sel&&sel.innerHTML!==html)sel.innerHTML=html;
   const use=S.gps_list.find(g=>g.in_use), bad=S.gps_list.filter(g=>g.frozen).map(g=>g.name);

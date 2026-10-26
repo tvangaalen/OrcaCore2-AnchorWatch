@@ -15,7 +15,10 @@ that has not changed at all for FROZEN_S is treated as frozen and skipped (real 
 digit), and with no usable source left the GPS alarm goes off. Each source reports two positions: navigation.position
 (used normally, about 4 per second) and navigation.gnss (the receiver's own fix, once a second). When the first one
 is held but the source's own fix still changes, that fix is used instead; only when both are unchanged is the source
-frozen. While a source is held, its GPS values are written to recordings/ (local only, never committed) for analysis.
+frozen. The Core's own GPS is the exception: it has a static hold. Recordings of 2026-10-26 show it keeps one fix
+(position and own fix alike) for up to 10 min while the boat lies still, and moves on as soon as the real position
+is about 10 m away (every release jumped 10.0-10.1 m). While its receiver is alive (the fix time keeps advancing)
+such a held 254 position is used, marked "hold": it is never more than about HOLD_M off. While a source is held, its GPS values are written to recordings/ (local only, never committed) for analysis.
 
 State (anchor, settings, track, events) is kept in anchor_state.json so a restart does not lose the watch.
 
@@ -37,13 +40,15 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.10.3"
+VERSION = "1.11.0"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
 FRESH_S = 10            # a position older than this is not used
 FROZEN_S = 60           # a position that has not changed at all for this long is frozen (see module doc)
 DIAG_S = 600            # how long the GPS values of a held source are recorded
+HOLD_M = 10             # the Core's GPS (254) holds its fix until the boat is this far away (measured, see module doc)
+HOLD_LOG_S = 3600       # "on hold" is logged at most once per this period (the hold comes and goes every few minutes)
 DEFAULT_GPS = "4,127,3,254"
 TRACK_EVERY_S = 5
 AIS_RANGE_M = 600
@@ -727,6 +732,9 @@ class AnchorWatch:
         self.diag_dir = Path(diag_dir) if diag_dir else None   # GPS values of held sources go here (None = off)
         self.diag = {}                     # source -> (file, recording ends at)
         self.raw = set()                   # sources whose navigation.position is held, own fix used instead
+        self.hold = set()                  # the Core's GPS on static hold: still used (within HOLD_M)
+        self.dt_seen = {}                  # source -> (fix time, time it last changed): is the receiver still alive?
+        self.hold_logged = None
         self.lock = threading.RLock()
         self.settings = dict(DEFAULTS)
         self.anchor = None                 # {"lat", "lon", "radius", "set_at"}
@@ -796,7 +804,17 @@ class AnchorWatch:
                 held[kind] = {src for src, c in d.items() if c["age"] <= FRESH_S and now - self.pos_seen[(kind, src)][2] >= FROZEN_S}
             # navigation.position held: use the receiver's own fix while that still changes; frozen only when both are held
             raw = {src for src in held["position"] if src in gsrcs and gsrcs[src]["age"] <= FRESH_S and src not in held["gnss"]}
-            frozen = held["position"] - raw
+            for src in gsrcs:
+                dt = sensors.get(f"navigation.gnss.{src}.datetime"); dt = dt[0] if dt else None
+                if dt is not None and (src not in self.dt_seen or self.dt_seen[src][0] != dt): self.dt_seen[src] = (dt, now)
+            # the Core's GPS on static hold: both positions held, but the receiver keeps producing fixes
+            hold = {src for src in held["position"] - raw if src == CORE_SOURCE and src in gsrcs and gsrcs[src]["age"] <= FRESH_S
+                    and src in self.dt_seen and now - self.dt_seen[src][1] <= FRESH_S}
+            frozen = held["position"] - raw - hold
+            if hold - self.hold and (self.hold_logged is None or now - self.hold_logged >= HOLD_LOG_S):
+                self.hold_logged = now
+                self.event(f"GPS {self.source_name(CORE_SOURCE)} on hold: the Core keeps its fix while the boat lies still and moves it "
+                           f"on after about {HOLD_M} m. Still used; position within about {HOLD_M} m", now)
             for src in raw - self.raw - self.frozen:
                 self.event(f"GPS {self.source_name(src)}: position unchanged for {FROZEN_S} s, its own GNSS fix still changes: using that", now)
             for src in frozen - self.frozen:
@@ -805,15 +823,16 @@ class AnchorWatch:
             for src in (self.frozen | self.raw) - frozen - raw:
                 if src in srcs: self.event(f"GPS {self.source_name(src)} is updating again", now, "ok")
             if self.diag_dir:
-                for src in held["position"] - set(self.diag): self.start_diag(src, now)
+                for src in (frozen | raw) - set(self.diag): self.start_diag(src, now)
                 self.record_diag(sensors, now)
-            self.frozen, self.raw = frozen, raw
+            self.frozen, self.raw, self.hold = frozen, raw, hold
             boat = read_boat(sensors, now, prefs, frozen, float(s["transducer_depth"]), raw); self.boat = boat; pos = boat["pos"]
+            if pos: pos["hold"] = pos["source"] in hold
             if boat["depth"] is not None:
                 if not self.last_depth or now - self.last_depth["t"] >= 60: self.dirty = True       # persisted about once a minute
                 self.last_depth = {"d": boat["depth"], "t": now, "lat": pos["lat"] if pos else None, "lon": pos["lon"] if pos else None}
             self.gps_list = [{"source": src, "name": self.source_name(src), "sats": c["sats"], "hdop": c["hdop"],
-                              "age": round(c["age"], 1), "frozen": src in frozen, "raw": src in raw, "in_use": bool(pos and pos["source"] == src)}
+                              "age": round(c["age"], 1), "frozen": src in frozen, "raw": src in raw, "hold": src in hold, "in_use": bool(pos and pos["source"] == src)}
                              for src, c in sorted(srcs.items(), key=lambda kv: (kv[0] != CORE_SOURCE, int(kv[0])))]
             self.core_down_since = None if connected else (self.core_down_since or now)
             if pos:

@@ -4,6 +4,18 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.11 — Orca Core GPS on static hold
+
+### 1.11.0
+- **The Orca Core's GPS (254) stays in use while it holds its fix.** The recordings of 2026-10-26 showed why it kept
+  being "frozen": the Core has a static hold. While the boat lies still it keeps one fix (up to 10 min in the
+  recordings) and moves it on as soon as the real position is about 10 m away; every release jumped 10.0-10.1 m.
+  As long as the receiver keeps producing fixes (the fix time advances), a held 254 position is now used and shown
+  as **GPS hold** (amber) in the Position tile and *hold (within 10 m)* in the GPS list. Its position is within about
+  10 m, so a drag shows at the latest about 10 m later. "On hold" is logged at most once an hour.
+- A 254 whose fix time stops, and any other receiver that stops changing, is still treated as frozen.
+- Held-GPS recordings are now made only for frozen sources (and those using their own fix), not for the static hold.
+
 ## 1.10 — Settings screen
 
 ### 1.10.3

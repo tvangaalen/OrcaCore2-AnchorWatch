@@ -169,7 +169,11 @@ when the API key is in place), otherwise it alerts after the interval.
   kept moving). A frozen position would hide a slow drag, so any GPS whose position has not changed at all for 60 s
   is skipped and logged; real receivers always jitter in the last digit. Each source sends two positions: the normal
   one and the receiver's own GNSS fix (`navigation.gnss`). If the normal one is held but the own fix still changes,
-  the own fix is used (shown as *own GNSS fix* in the GPS list); only when both are held is the source frozen. With no
+  the own fix is used (shown as *own GNSS fix* in the GPS list); only when both are held is the source frozen.
+  The Core's own GPS (254) is the exception: it has a **static hold**. Recordings of 2026-10-26 show it keeps one fix
+  for up to 10 min while the boat lies still and moves it on as soon as the boat is about 10 m away (every release
+  jumped 10.0-10.1 m). While its receiver keeps producing fixes, a held 254 position stays in use, shown as
+  *GPS hold* in the Position tile: it is within about 10 m, so a drag shows at the latest about 10 m later. With no
   usable GPS left, the GPS alarm goes off. While a source is held, its GPS values are recorded for 10 min to
   `recordings/gps_held_*.jsonl` (local only, git-ignored), to find out why it held.
 - With the instruments off there is no depth or wind; the tiles then say that the depth or wind alarm is inactive.

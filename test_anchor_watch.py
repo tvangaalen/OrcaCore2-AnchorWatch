@@ -143,6 +143,41 @@ class AnchorWatchTest(unittest.TestCase):
         self.assertIsNone(self.w.boat["pos"]); self.assertIn("254", self.w.frozen); self.assertEqual(self.w.raw, set())
         self.assertTrue(any("(position and own GNSS fix)" in e["text"] for e in self.w.events))
 
+    def core_static_hold(self, true_lat, true_lon, clock=True):
+        # Core's GPS with static hold (recordings 2026-10-26): one fix, kept until the real position is 10 m away
+        if not hasattr(self, "held") or dist_bearing_m(*self.held, true_lat, true_lon)[0] >= 10: self.held = (true_lat, true_lon)
+        kv = dict(navigation__position__254__latitude=self.held[0], navigation__position__254__longitude=self.held[1],
+                  navigation__gnss__254__latitude=self.held[0], navigation__gnss__254__longitude=self.held[1],
+                  navigation__gnss__254__method=2, navigation__gnss__254__satellites=29, navigation__motion__254__stationary=1)
+        if clock: kv["navigation__gnss__254__datetime"] = f"T{int(self.s.t)}"
+        self.s.put(**kv)
+
+    def test_core_static_hold_is_used_and_a_drag_still_shows(self):
+        self.w.command({"action": "settings", "settings": {"gps_sources": "254,4,127,3"}})
+        self.s.t += 11
+        for i in range(600):                                # 10 min swinging within a few metres: the fix stays held
+            self.core_static_hold(*offset(LAT, LON, i % 360, 3)); self.w.tick(self.s.t); self.s.t += 1
+        self.assertEqual(self.w.boat["pos"]["source"], "254"); self.assertTrue(self.w.boat["pos"]["hold"])
+        self.assertEqual(self.w.frozen, set()); self.assertNotIn("gps", self.w.alarms)
+        self.assertEqual(sum("on hold" in e["text"] for e in self.w.events), 1)
+        self.assertEqual(self.w.state()["gps_list"][0]["hold"], True)
+        for i in range(120):                                # drags away at 0.5 m/s: the held fix steps every 10 m
+            self.core_static_hold(*offset(LAT, LON, 0, 3 + i * 0.5)); self.w.tick(self.s.t); self.s.t += 1
+        self.assertIn("drag", self.w.alarms)
+
+    def test_core_hold_without_new_fixes_is_frozen(self):
+        self.s.t += 11
+        self.core_static_hold(LAT, LON)
+        for _ in range(70): self.core_static_hold(LAT, LON, clock=False); self.w.tick(self.s.t); self.s.t += 1
+        self.assertIsNone(self.w.boat["pos"]); self.assertIn("254", self.w.frozen); self.assertEqual(self.w.hold, set())
+
+    def test_other_receivers_are_never_on_hold(self):
+        for _ in range(62):                                 # source 4 stuck but with a ticking clock: still frozen
+            self.s.put(navigation__position__4__latitude=LAT, navigation__position__4__longitude=LON, navigation__gnss__4__method=1,
+                       navigation__gnss__4__latitude=LAT, navigation__gnss__4__longitude=LON, navigation__gnss__4__datetime=f"T{int(self.s.t)}")
+            self.s.boat(*offset(LAT, LON, 90, 2), src="127", frozen=False); self.w.tick(self.s.t); self.s.t += 1
+        self.assertIn("4", self.w.frozen); self.assertEqual(self.w.boat["pos"]["source"], "127")
+
     def test_held_source_values_are_recorded(self):
         d = tempfile.TemporaryDirectory()
         try:

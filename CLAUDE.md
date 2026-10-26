@@ -13,7 +13,9 @@ Overview: `README.md`. Release history: `CHANGELOG.md`.
   the boat as stationary, and a frozen position hides a drag. Keep the frozen-position check in `AnchorWatch.tick`
   (`FROZEN_S`: unchanged for 60 s = not used) for every source, including 254, which the user can choose (Core-only
   power-saving setup). A held `navigation.position` may fall back to the same source's own `navigation.gnss` fix only
-  while that fix itself keeps changing; never use a position whose values are unchanged for FROZEN_S. Tests must give
+  while that fix itself keeps changing; never use a position whose values are unchanged for FROZEN_S. Only exception:
+  source 254's measured static hold (releases after HOLD_M = 10 m), used only while its fix time keeps advancing;
+  never extend that exception to other receivers or drop the fix-time check. Tests must give
   simulated receivers jitter, or they count as frozen.
 - **Parse Core messages with `orca_reader.parse_message`**, never plain `json.loads`: the Core sends unescaped text.
 - The alarm logic runs on the server (`AnchorWatch.tick`); the page only displays and sends commands. Do not move
