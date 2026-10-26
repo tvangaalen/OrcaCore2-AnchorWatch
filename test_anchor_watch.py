@@ -293,12 +293,9 @@ class TileCacheTest(unittest.TestCase):
     def test_depth_source_removed(self):
         self.assertNotIn("depth", TileCache.SOURCES)
 
-    def test_official_spanish_chart_is_wms_by_tile_bbox(self):
-        from anchor_watch import tile_bbox_3857
-        with self.fake(b"PNG"): self.assertEqual(self.cache.get("ihm", 15, 8584, 6201), (b"PNG", "image/png"))
-        u = self.calls[0]
-        self.assertTrue(u.startswith("https://ideihm.covam.es/wms/enc?")); self.assertIn("layers=RasterENC", u)
-        self.assertIn("crs=EPSG:3857&bbox=" + tile_bbox_3857(15, 8584, 6201), u); self.assertIn("transparent=true", u)
+    def test_sea_chart_source_removed(self):
+        self.assertNotIn("ihm", TileCache.SOURCES)                 # the server answers 404 for layers not in SOURCES
+        self.assertEqual(sorted(TileCache.SOURCES), ["osm", "satellite", "seamark"])
 
     def test_out_of_range_rejected(self):
         with self.fake(b"X"):

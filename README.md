@@ -183,13 +183,12 @@ when the API key is in place), otherwise it alerts after the interval.
 ### Map
 
 - **Layers:**
-  - *Sea chart*: the **official Spanish electronic charts** of the Instituto Hidrográfico de la Marina (IHM) in
-    Spanish waters (depth contours and soundings, rocks, buoys and lights, anchorages, restricted areas), over the
-    street map elsewhere, where the chart service is transparent. Free for non-commercial use with the attribution
-    "© Instituto Hidrográfico de la Marina" ([licence](https://ideihm.covam.es/portal/licencias/)); not for navigation.
   - *Street map* (OpenStreetMap): land map only, the sea is plain blue.
   - *Satellite* (Esri World Imagery) and *Plain*.
   - Overlay from OpenSeaMap: *Seamarks* (buoys, beacons, lights).
+  - No sea charts (removed in 1.12.0).
+- **Windy button** (wind icon, under the zoom buttons): opens the [Windy.com](https://www.windy.com) forecast for the
+  boat's GPS position (else the anchor, else the map centre) in a new browser tab.
   - No official source could be used for Italy (no public chart service of the Istituto Idrografico della Marina) or
     Greece (the HNHS chart service needs an application and agreement), and CM93 (C-MAP) is proprietary data that is
     not built in. The Orca Core holds no chart data (the Orca app keeps its licensed charts on the phone).

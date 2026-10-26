@@ -4,6 +4,14 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.12 — No sea charts, Windy forecast
+
+### 1.12.0
+- **Sea chart layer removed** (the Spanish IHM charts: they only cover Spanish waters). The layers are now *Street
+  map*, *Satellite* and *Plain*; the *Seamarks* overlay (OpenSeaMap) stays. The IHM credit is gone from Credits.
+- **Windy button** (wind icon, under the zoom buttons): opens the Windy.com forecast for the boat's GPS position
+  (else the anchor, else the map centre) in a new browser tab.
+
 ## 1.11 — Orca Core GPS on static hold
 
 ### 1.11.1

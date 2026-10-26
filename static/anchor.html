@@ -100,11 +100,10 @@ button.on{outline:2px solid var(--accent)}
 .ais-ic.net svg{fill:none;stroke:var(--ais);stroke-width:1.6}
 .ais-ic.net span{font-style:italic;opacity:.85}
 /* tiles follow the theme; seamarks are never colour-inverted so buoy colours keep their meaning */
-@media (prefers-color-scheme:dark){:root:not([data-theme]) .tl-osm{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}:root:not([data-theme]) .tl-satellite{filter:brightness(.8)}:root:not([data-theme]) .tl-ihm{filter:brightness(.7) contrast(1.1)}}
+@media (prefers-color-scheme:dark){:root:not([data-theme]) .tl-osm{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}:root:not([data-theme]) .tl-satellite{filter:brightness(.8)}}
 :root[data-theme="dark"] .tl-osm{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}
 :root[data-theme="dark"] .tl-satellite{filter:brightness(.8)}
-:root[data-theme="dark"] .tl-ihm{filter:brightness(.7) contrast(1.1)}
-:root[data-theme="night"] .tl-osm,:root[data-theme="night"] .tl-ihm{filter:invert(1) grayscale(1) brightness(.3) sepia(1) hue-rotate(-50deg) saturate(6)}
+:root[data-theme="night"] .tl-osm{filter:invert(1) grayscale(1) brightness(.3) sepia(1) hue-rotate(-50deg) saturate(6)}
 :root[data-theme="night"] .tl-satellite,:root[data-theme="night"] .tl-seamark{filter:grayscale(1) brightness(.4) sepia(1) hue-rotate(-50deg) saturate(6)}
 .mapctl{position:absolute;right:10px;top:10px;z-index:500;display:flex;flex-direction:column;gap:6px}
 .mapctl button{width:40px;height:40px;min-height:40px;padding:0;font-size:18px;opacity:.92}
@@ -201,7 +200,7 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
       <div class="mapwrap" id="mapwrap">
         <div id="map"></div>
         <div class="layerbar" id="layerbar">
-          <div class="lgroup"><button data-b="sea" title="Official sea chart where available (Spanish waters), street map elsewhere">Sea chart</button><button data-b="street">Street map</button><button data-b="satellite">Satellite</button><button data-b="plain">Plain</button></div>
+          <div class="lgroup"><button data-b="street">Street map</button><button data-b="satellite">Satellite</button><button data-b="plain">Plain</button></div>
           <div class="lgroup"><button id="seaBtn">Seamarks</button></div>
         </div>
         <div class="movebar" id="movebar">
@@ -213,7 +212,7 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
         </div>
         <button class="mapinfo" id="mapInfo" title="Map credits" aria-label="Map credits">i</button>
         <div class="mapctl">
-          <button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">−</button><button id="zfit" title="Fit circle and boat">⤢</button>
+          <button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">−</button><button id="zfit" title="Fit circle and boat">⤢</button><button id="windyBtn" title="Weather forecast on Windy.com for the boat's position" aria-label="Weather forecast on Windy.com"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7"/></svg></button>
         </div>
       </div>
       <div class="trackbar"><span id="trackInfo">Track: –</span><button class="small" id="newTrack" title="Delete the recorded track and the max swing, start recording afresh">Start new track</button></div>
@@ -352,7 +351,6 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
       <h3>Credits</h3>
       <ul>
         <li>Street map: © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors (ODbL)</li>
-        <li>Sea chart: © <a href="https://ideihm.covam.es/portal/licencias/" target="_blank">Instituto Hidrográfico de la Marina</a> (non-commercial use)</li>
         <li>Satellite imagery: © Esri, Maxar, Earthstar Geographics and the GIS User Community (<a href="https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9" target="_blank">Esri World Imagery</a>)</li>
         <li>Seamarks: © <a href="https://www.openseamap.org" target="_blank">OpenSeaMap</a> contributors (CC BY-SA)</li>
         <li>Tide: <a href="https://open-meteo.com/" target="_blank">Weather data by Open-Meteo.com</a> (CC BY 4.0)</li>
@@ -618,11 +616,8 @@ function tile(l,v,u,s){return `<div class="tile"><div class="l">${l}</div><div c
 // ---------- map (Leaflet; tiles come through the watch PC, which keeps them for offline use)
 const OSM='© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>';
 const tl=(l,ext,maxN,attr)=>L.tileLayer(`/tiles/${l}/{z}/{x}/{y}.${ext}`,{maxNativeZoom:maxN,maxZoom:21,attribution:attr,className:'tl-'+l});
-// "Sea chart" = the official Spanish chart (IHM) over the street map: the chart covers Spanish waters, elsewhere its
-// tiles are transparent and the street map shows through
 const street=tl('osm','png',19,OSM).setZIndex(0);
-const ihm=tl('ihm','png',16,'Sea chart © <a href="https://ideihm.covam.es/portal/licencias/" target="_blank">Instituto Hidrográfico de la Marina</a>').setZIndex(1);
-const bases={sea:L.layerGroup([street,ihm]),street:L.layerGroup([street]),satellite:tl('satellite','jpg',19,'Imagery © Esri, Maxar, Earthstar Geographics'),plain:L.layerGroup()};
+const bases={street:L.layerGroup([street]),satellite:tl('satellite','jpg',19,'Imagery © Esri, Maxar, Earthstar Geographics'),plain:L.layerGroup()};
 const seamarks=tl('seamark','png',18,'Seamarks © <a href="https://www.openseamap.org" target="_blank">OpenSeaMap</a>');
 seamarks.setZIndex(3);
 const map=L.map('map',{zoomControl:false,attributionControl:false,preferCanvas:true,zoomSnap:1,maxZoom:21}).setView([39,1.5],9);
@@ -699,6 +694,12 @@ function fitView(){
 $('zin').onclick=()=>map.zoomIn();
 $('zout').onclick=()=>map.zoomOut();
 $('zfit').onclick=()=>{view.auto=true;fitView()};
+// Windy.com forecast for where the boat is (GPS, else the anchor, else the map centre), in a new browser tab
+$('windyBtn').onclick=()=>{
+  const p=S&&S.boat&&S.boat.pos||S&&S.anchor||null, c=p?{lat:p.lat,lng:p.lon}:map.getCenter();
+  const la=c.lat.toFixed(4), lo=c.lng.toFixed(4);
+  window.open(`https://www.windy.com/${la}/${lo}?${la},${lo},10`,'_blank','noopener');
+};
 // Move anchor: a draft position follows clicks and arrow keys (circle and anchor move with it); Save sends it
 let draft=null;
 const M_LAT=180/Math.PI/6371008.8;                           // degrees latitude per metre (same earth as the server)
