@@ -224,6 +224,18 @@ class AnchorWatchTest(unittest.TestCase):
             self.assertEqual(len(list(Path(d.name).glob("gps_held_254_*.jsonl"))), 1)          # values recorded during the hold
         finally: d.cleanup()
 
+    def test_stationary_changes_are_logged(self):
+        d = tempfile.TemporaryDirectory()
+        try:
+            self.w.diag_dir = Path(d.name)
+            for st in (0, 0, 1, 1, 0):
+                self.s.put(navigation__motion__254__stationary=st, navigation__cogsog__254__speed=0.5 * (1 - st)); self.w.tick(self.s.t); self.s.t += 1
+            rows = [json.loads(x) for x in (Path(d.name) / "core_gps_log.jsonl").read_text(encoding="utf-8").splitlines()]
+            rows = [r for r in rows if r["what"].startswith("stationary")]
+            self.assertEqual([r["what"] for r in rows], ["stationary 1 → 0", "stationary 0 → 1", "stationary 1 → 0"])
+            self.assertEqual(rows[0]["sog_kn"], 0.97); self.assertEqual(rows[1]["sog_kn"], 0.0); self.assertFalse(rows[1]["on_hold"])
+        finally: d.cleanup()
+
     def test_frozen_raw_receiver_fails_over_and_recovers(self):
         for _ in range(62):                                 # source 4 stuck on one value, 127 alive
             self.s.put(navigation__position__4__latitude=LAT, navigation__position__4__longitude=LON, navigation__gnss__4__method=1)

@@ -16,13 +16,15 @@ digit), and with no usable source left the GPS alarm goes off. Each source repor
 (used normally, about 4 per second) and navigation.gnss (the receiver's own fix, once a second). When the first one
 is held but the source's own fix still changes, that fix is used instead; only when both are unchanged is the source
 frozen. The Core's own GPS is the exception: it has a static hold. Recordings of 2026-10-26 show it keeps one fix
-(position and own fix alike) for up to 10 min while the boat lies still, and moves on as soon as the real position
+(position and own fix alike) while the boat lies still (46 min seen on 2026-10-27), and moves on as soon as the real position
 is about 10 m away (every release jumped 10.0-10.1 m). While its receiver is alive (the fix time keeps advancing)
 such a held 254 position is used, marked "hold": it is never more than about HOLD_M off. A live receiver is
 preferred over a held 254, whatever the order, so with the instruments on the track stays smooth. While a source is held, its GPS values are written to recordings/ (local only, never committed) for analysis.
 What starts the hold is not known yet (a power cycle of the Core clears it). To find out, the Core's route state
 (waypoints, arrival circle entered, waypoint crossed) is logged, and every start and end of a hold goes to
-recordings/core_gps_log.jsonl together with that route state and the stationary flag.
+recordings/core_gps_log.jsonl together with that route state and the stationary flag. Every change of the Core's
+stationary flag goes there too, with speed and hold state: does the hold start when the boat comes to rest? (After
+2026-10-27 the route is ruled out: holds came and went with and without a route, never with an arrival flag set.)
 
 State (anchor, settings, track, events) is kept in anchor_state.json so a restart does not lose the watch.
 
@@ -44,7 +46,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.12.1"
+VERSION = "1.12.2"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -747,6 +749,7 @@ class AnchorWatch:
         self.hold_logged = None; self.hold_was = set()
         self.route_seen = None             # last route state of the Core (ROUTE_KEYS label -> value)
         self.hold_since = None             # start of the current 254 hold
+        self.stationary_seen = None        # last value of the Core's stationary flag
         self.lock = threading.RLock()
         self.settings = dict(DEFAULTS)
         self.anchor = None                 # {"lat", "lon", "radius", "set_at"}
@@ -831,6 +834,12 @@ class AnchorWatch:
                 elif route: self.event("Orca Core route: " + ", ".join(f"{k} {v}" for k, v in route.items()), now)
                 self.core_log(now, "route", sensors, route)
                 self.route_seen = route
+            st = sensors.get(f"navigation.motion.{CORE_SOURCE}.stationary"); st = st[0] if st else None
+            if st is not None and st != self.stationary_seen:
+                sog = sensors.get(f"navigation.cogsog.{CORE_SOURCE}.speed")
+                self.core_log(now, f"stationary {self.stationary_seen} → {st}", sensors, route,
+                              sog_kn=round(sog[0] * 1.943844, 2) if sog and sog[0] is not None else None, on_hold=CORE_SOURCE in self.hold)
+                self.stationary_seen = st
             if CORE_SOURCE in hold and CORE_SOURCE not in self.hold:
                 self.hold_since = now; self.core_log(now, "hold start", sensors, route)
             elif CORE_SOURCE in self.hold and CORE_SOURCE not in hold and self.hold_since is not None:

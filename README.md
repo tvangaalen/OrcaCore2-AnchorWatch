@@ -171,7 +171,7 @@ when the API key is in place), otherwise it alerts after the interval.
   one and the receiver's own GNSS fix (`navigation.gnss`). If the normal one is held but the own fix still changes,
   the own fix is used (shown as *own GNSS fix* in the GPS list); only when both are held is the source frozen.
   The Core's own GPS (254) is the exception: it has a **static hold**. Recordings of 2026-10-26 show it keeps one fix
-  for up to 10 min while the boat lies still and moves it on as soon as the boat is about 10 m away (every release
+  while the boat lies still (46 min seen) and moves it on as soon as the boat is about 10 m away (every release
   jumped 10.0-10.1 m). While its receiver keeps producing fixes, a held 254 position stays in use, shown as
   *GPS hold* in the Position tile: it is within about 10 m, so a drag shows at the latest about 10 m later.
   A live receiver is preferred over a held 254, so with the instruments on the track stays smooth. With no
@@ -179,7 +179,9 @@ when the API key is in place), otherwise it alerts after the interval.
   `recordings/gps_held_*.jsonl` (local only, git-ignored), to find out why it held. What starts the 254 hold is
   not known yet (a power cycle of the Core clears it). The Core's route state (from/to waypoint, arrival circle
   entered, waypoint crossed) is logged on every change, and each hold start and end goes to
-  `recordings/core_gps_log.jsonl` with that route state, to see whether arriving at a waypoint starts it.
+  `recordings/core_gps_log.jsonl` with that route state, and so does every change of the Core's stationary flag
+  (with speed). The route is ruled out by now (2026-10-27: holds with and without a route, never an arrival flag);
+  the open question is whether the hold starts when the Core's motion detector switches to stationary.
 - With the instruments off there is no depth or wind; the tiles then say that the depth or wind alarm is inactive.
 - Anchor, settings, track and log are kept in `anchor_state.json`, so a restart resumes the watch.
 

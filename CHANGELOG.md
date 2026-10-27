@@ -6,6 +6,12 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ## 1.12 — No sea charts, Windy forecast
 
+### 1.12.2
+- Every change of the Orca Core's **stationary flag** now goes to `recordings/core_gps_log.jsonl`, with speed and
+  whether 254 is on hold, to see whether the hold starts when the Core decides the boat lies still. The route is ruled
+  out: on 2026-10-27 holds came and went with and without a route, and the arrival flags were never set.
+- Docs: a hold lasts as long as the boat stays within about 10 m (46 min seen), not "up to 10 min".
+
 ### 1.12.1
 - **What starts the Core's GPS hold?** To find out, the Orca Core's route state (from/to waypoint, arrival circle
   entered, waypoint crossed, navigation status) now shows in the event log on every change, and each start and end of
