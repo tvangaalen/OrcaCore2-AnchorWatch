@@ -38,6 +38,25 @@ h1 .logo{flex:none;border-radius:7px}
 .setgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;align-items:start}
 .setgrid h3{margin:0 0 10px;font-size:15px}
 .setgrid .logsec{grid-column:1/-1}
+.gpslist{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.gpslist li{display:flex;align-items:center;gap:10px;padding:8px 8px 8px 10px;border-top:1px solid var(--line)}
+.gpslist li:first-child{border-top:0}
+.gpslist li.use{background:color-mix(in srgb,var(--ok) 12%,transparent)}
+.gpslist li.off .gname{color:var(--muted)}
+.gpslist .gnum{width:18px;text-align:right;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.gpslist .gdot{width:10px;height:10px;border-radius:50%;flex:none;background:var(--muted)}
+.gpslist .gdot.ok{background:var(--ok)}.gpslist .gdot.warn{background:var(--warn)}.gpslist .gdot.bad{background:var(--bad)}
+.gpslist .gdot.never{background:transparent;border:1.5px solid var(--muted)}
+.gpslist .gtxt{flex:1;min-width:0}
+.gpslist .gname{font-weight:600;overflow-wrap:anywhere}
+.gpslist .gstat{font-size:13px;color:var(--muted)}
+.gpslist .gstat b{font-weight:600}
+.gpslist .gstat .ok{color:var(--ok)}.gpslist .gstat .warn{color:var(--warn)}.gpslist .gstat .bad{color:var(--bad)}
+.gpslist .guse{font-size:11px;font-weight:700;letter-spacing:.04em;color:#fff;background:var(--ok);border-radius:8px;padding:1px 7px;margin-left:6px;vertical-align:1px}
+:root[data-theme="night"] .gpslist .guse{color:#000}
+.gpslist .garr{display:flex;gap:6px;flex:none}
+.gpslist .garr button{min-height:40px;min-width:40px;padding:0;font-size:16px;line-height:1}
+.gpslist .garr button:disabled{opacity:.3;cursor:default}
 .credits ul{margin:0;padding-left:18px;font-size:13px;line-height:1.7}
 .credits a{color:var(--accent)}
 .mapinfo{position:absolute;right:10px;bottom:10px;z-index:500;width:26px;height:26px;min-height:26px;padding:0;border-radius:50%;font:600 14px/1 Georgia,serif;opacity:.9}
@@ -332,20 +351,24 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
           <label class="f">Minimum chain formula<input type="text" data-s="chain_formula" placeholder="5*(D+B)" autocomplete="off" spellcheck="false"></label>
         </div>
         <div class="note" style="margin-top:4px">D = max water depth next 24 h, B = bow height, LOA. Numbers, + − * / (or x) and brackets, e.g. <b>3*D + LOA</b> or <b>5*(D+B)</b>. Rounded up to whole metres.</div>
-        <div class="row">
-          <label class="f">GPS source<select id="gpsSel"></select></label>
-        </div>
-        <div class="note" id="gpsInfo" style="margin-top:4px"></div>
           <div class="row" style="justify-content:space-between;margin-top:10px">
             <label class="check"><input type="checkbox" data-s="internet_ais"> Internet AIS (aisstream.io)</label>
             <button class="small" id="netAisCheck">Reconnect</button>
           </div>
           <div class="note" id="netAisStatus" style="margin-top:4px"></div>
         <div class="row">
-          <label class="f">GPS sources, in order (advanced)<input type="text" data-s="gps_sources"></label>
           <label class="f">Track kept (h)<input type="number" data-s="track_hours" min="1" max="72"></label>
         </div>
-        <p class="note">Sources are tried in this order, the next one takes over when a GPS stops. 254 is the Orca Core's own GPS. A GPS whose position has not changed for 60 s uses its own GNSS fix while that still changes; if that has not changed either it counts as frozen and is skipped. Exception: the Orca Core (254) keeps its fix while the boat lies still and moves it on after about 10 m; it stays in use (shown as hold), within about 10 m.</p>
+    </section>
+    <section class="card gpscard">
+      <h3>GPS sources</h3>
+      <div class="note" id="gpsInfo" style="margin:0 0 8px"></div>
+      <ol class="gpslist" id="gpsList"></ol>
+      <div class="row" style="justify-content:space-between;align-items:center;margin-top:10px">
+        <span class="note" style="margin:0">Order is saved straight away.</span>
+        <button class="small" id="gpsDefault">Default order</button>
+      </div>
+      <p class="note">Tried from top to bottom: the first active GPS is used and the next one takes over when it stops. 254 is the Orca Core's own GPS. A GPS whose position has not changed for 60 s uses its own GNSS fix while that still changes; if that has not changed either it counts as frozen and is skipped. Exception: the Orca Core (254) keeps its fix while the boat lies still and moves it on after about 10 m; it stays usable (shown as hold), but a live GPS is preferred over it.</p>
     </section>
     <section class="card credits" id="credits">
       <h3>Credits</h3>
@@ -746,24 +769,43 @@ $('rPlus').onclick=()=>cmd({action:'radius',radius:S.anchor.radius+5},$('watchEr
 $('silenceBtn').onclick=()=>cmd({action:'silence',minutes:5},$('watchErr'));
 $('raiseBtn').onclick=()=>{if(confirm('Anchor up? This stops the watch.'))cmd({action:'raise'},$('watchErr'))};
 $('aliveCheck').onclick=()=>cmd({action:'alive_check'},$('settingsMsg')).then(ok=>{if(ok)$('settingsMsg').textContent='Ping sent'});
-// GPS source choice: the chosen source first, then the rest of the default order as fallback
-function gpsOrder(first){const d=S.gps_default.split(',');return first==='auto'?S.gps_default:[first,...d.filter(x=>x!==first)].join(',')}
+// GPS sources: every source ever seen, in the order they are tried; the arrows move one up or down (saved straight away)
+const GPS_STATUS={in_use:['ok','<span class="ok">Active</span>'],active:['ok','<span class="ok">Active</span>, standby'],
+  hold:['warn','<span class="warn">Active, on hold</span> (within 10 m)'],raw:['warn','<span class="warn">Active</span>, own GNSS fix'],
+  frozen:['bad','<span class="bad">Frozen</span>, skipped'],inactive:['off','Not active'],never:['never','Never seen']};
 function renderGps(){
-  const sel=$('gpsSel'), cur=S.settings.gps_sources, first=cur===S.gps_default?'auto':cur.split(',')[0];
-  const known=new Map(S.gps_list.map(g=>[g.source,g]));
-  for(const s of S.gps_default.split(','))if(!known.has(s))known.set(s,{source:s,name:s==='254'?'254 (Orca Core 2)':s,missing:true});
-  const opt=(v,txt)=>`<option value="${esc(v)}"${v===first?' selected':''}>${esc(txt)}</option>`;
-  const html=opt('auto',`Automatic (${S.gps_default.replaceAll(',',' → ')})`)+[...known.values()].map(g=>opt(g.source,
-    `${g.name}${g.missing?' – not seen':g.frozen?' – frozen':g.hold?' – hold (within 10 m)':g.raw?' – own GNSS fix':g.sats!=null?` – ${g.sats} sats`:''}${g.source==='254'?' · own GPS of the Core':''}`)).join('')
-    +(first!=='auto'&&!known.has(first)?opt(first,first+' – not seen'):'');
-  if(document.activeElement!==sel&&sel.innerHTML!==html)sel.innerHTML=html;
-  const use=S.gps_list.find(g=>g.in_use), bad=S.gps_list.filter(g=>g.frozen).map(g=>g.name);
-  $('gpsInfo').innerHTML=(use?`In use: <b>${esc(use.name)}</b>${use.sats!=null?' · '+use.sats+' sats':''}${use.hdop!=null?' · HDOP '+use.hdop:''}`:'<span style="color:var(--bad)">No usable GPS</span>')
-    +(bad.length?` · <span style="color:var(--warn)">frozen, skipped: ${esc(bad.join(', '))}</span>`:'')
-    +` · order ${esc(cur.replaceAll(',',' → '))}`;
+  const rows=S.gps_rows||[], use=rows.find(r=>r.status==='in_use'), list=$('gpsList');
+  const info=use?`In use: <b>${esc(use.name)}</b>${use.sats?' · '+use.sats+' sats':''}${use.hdop!=null?' · HDOP '+use.hdop:''}`
+    :'<span style="color:var(--bad)">No usable GPS</span>';
+  if($('gpsInfo').innerHTML!==info)$('gpsInfo').innerHTML=info;
+  const part=r=>{const [dot,txt]=GPS_STATUS[r.status]||GPS_STATUS.inactive, act=!['inactive','never'].includes(r.status);
+    const det=act?[r.sats?r.sats+' sats':'',r.hdop!=null?'HDOP '+r.hdop:''].filter(Boolean).join(' · ')
+      :r.last_seen!=null?'last seen '+ago(r.last_seen)+' ago':'';
+    return {cls:r.status==='in_use'?'use':act?'':'off', dot:'gdot '+dot,
+      txt:`<div class="gname">${esc(r.name)}${r.status==='in_use'?'<span class="guse">IN USE</span>':''}</div><div class="gstat">${txt}${det?' · '+esc(det):''}</div>`}};
+  const items=[...list.querySelectorAll('li[data-src]')];
+  if(rows.length&&items.length===rows.length&&items.every((li,i)=>li.dataset.src===rows[i].source)){
+    // same order: update the texts only, so the arrow buttons stay put while someone taps them
+    rows.forEach((r,i)=>{const p=part(r), li=items[i];
+      if(li.className!==p.cls)li.className=p.cls;
+      const d=li.querySelector('.gdot');if(d.className!==p.dot)d.className=p.dot;
+      const g=li.querySelector('.gtxt');if(g.innerHTML!==p.txt)g.innerHTML=p.txt});
+    return;
+  }
+  list.innerHTML=rows.map((r,i)=>{const p=part(r);
+    return `<li class="${p.cls}" data-src="${esc(r.source)}"><span class="gnum">${i+1}</span><span class="${p.dot}"></span><div class="gtxt">${p.txt}</div>`
+      +`<span class="garr"><button data-mv="${i}" data-d="-1" aria-label="Move ${esc(r.name)} up"${i?'':' disabled'}>▲</button>`
+      +`<button data-mv="${i}" data-d="1" aria-label="Move ${esc(r.name)} down"${i<rows.length-1?'':' disabled'}>▼</button></span></li>`}).join('')
+    ||'<li><span class="gtxt note" style="margin:0">No GPS seen yet</span></li>';
 }
-$('gpsSel').onchange=e=>{const order=gpsOrder(e.target.value);
-  cmd({action:'settings',settings:{gps_sources:order}},$('settingsMsg')).then(ok=>{if(ok){document.querySelector('[data-s=gps_sources]').value=order;$('settingsMsg').textContent='GPS source saved'}})};
+function saveGpsOrder(order){
+  cmd({action:'settings',settings:{gps_sources:order}},$('settingsMsg')).then(ok=>{if(ok){S.settings.gps_sources=order;$('settingsMsg').textContent='GPS order saved'}})}
+$('gpsList').onclick=e=>{const b=e.target.closest('button[data-mv]');if(!b||b.disabled)return;
+  const src=(S.gps_rows||[]).map(r=>r.source), i=+b.dataset.mv, j=i+(+b.dataset.d);if(j<0||j>=src.length)return;
+  [src[i],src[j]]=[src[j],src[i]];
+  const r=S.gps_rows;[r[i],r[j]]=[r[j],r[i]];renderGps();                  // show the move at once, the next update confirms it
+  saveGpsOrder(src.join(','))};
+$('gpsDefault').onclick=()=>saveGpsOrder(S.gps_default);
 $('netAisCheck').onclick=()=>cmd({action:'net_ais_check'},$('settingsMsg')).then(ok=>{if(ok)$('settingsMsg').textContent='Reconnecting internet AIS'});
 $('alarmTest').onclick=()=>{if(confirm('Send a real test alarm? Your phone rings every 30 s until you tap Acknowledge in Pushover or press "Stop test alarm" (at most 10 minutes).'))
   cmd({action:'push_alarm_test'},$('settingsMsg')).then(ok=>{if(ok)$('settingsMsg').textContent='Test alarm sent'})};

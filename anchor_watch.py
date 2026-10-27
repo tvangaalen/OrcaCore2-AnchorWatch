@@ -46,7 +46,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.12.2"
+VERSION = "1.13.0"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -766,6 +766,7 @@ class AnchorWatch:
         self.pos_seen = {}                 # (kind, source) -> (lat, lon, time the value last changed)
         self.frozen = set()                # sources whose position stopped changing (FROZEN_S)
         self.gps_list = []                 # every position source, for the page
+        self.gps_seen = {}                 # every GPS source ever seen: src -> {"name", "first", "last"} (kept in the state file)
         self.core_down_since = None
         self.started = time.time()
         self.dirty = False
@@ -788,12 +789,13 @@ class AnchorWatch:
         if self.settings["gps_sources"] == "4,127,3": self.settings["gps_sources"] = DEFAULT_GPS   # old default (< 1.2.0)
         self.anchor = d.get("anchor"); self.max_dist = d.get("max_dist", 0.0)
         self.track = deque(d.get("track", [])); self.events.extend(d.get("events", [])); self.last_depth = d.get("last_depth")
+        self.gps_seen = {str(k): v for k, v in (d.get("gps_seen") or {}).items() if isinstance(v, dict)}
         if self.anchor: log.info("anchor watch restored: %.6f, %.6f radius %.0f m", self.anchor["lat"], self.anchor["lon"], self.anchor["radius"])
 
     def save(self):
         with self.lock:
             d = {"settings": self.settings, "anchor": self.anchor, "max_dist": self.max_dist,
-                 "track": list(self.track), "events": list(self.events), "last_depth": self.last_depth}
+                 "track": list(self.track), "events": list(self.events), "last_depth": self.last_depth, "gps_seen": self.gps_seen}
             self.dirty = False
         tmp = self.state_file.with_suffix(".tmp")
         tmp.write_text(json.dumps(d, separators=(",", ":")), encoding="utf-8"); os.replace(tmp, self.state_file)
@@ -832,7 +834,7 @@ class AnchorWatch:
                     ch = ", ".join(f"{k} {self.route_seen.get(k)} → {v}" for k, v in route.items() if self.route_seen.get(k) != v)
                     self.event(f"Orca Core route: {ch}", now)
                 elif route: self.event("Orca Core route: " + ", ".join(f"{k} {v}" for k, v in route.items()), now)
-                self.core_log(now, "route", sensors, route)
+                if route or self.route_seen: self.core_log(now, "route", sensors, route)   # not the empty state before the first data
                 self.route_seen = route
             st = sensors.get(f"navigation.motion.{CORE_SOURCE}.stationary"); st = st[0] if st else None
             if st is not None and st != self.stationary_seen:
@@ -869,6 +871,13 @@ class AnchorWatch:
             self.gps_list = [{"source": src, "name": self.source_name(src), "sats": c["sats"], "hdop": c["hdop"],
                               "age": round(c["age"], 1), "frozen": src in frozen, "raw": src in raw, "hold": src in hold, "in_use": bool(pos and pos["source"] == src)}
                              for src, c in sorted(srcs.items(), key=lambda kv: (kv[0] != CORE_SOURCE, int(kv[0])))]
+            for src, c in srcs.items():
+                if c["age"] > FRESH_S: continue
+                g = self.gps_seen.get(src)
+                if g is None: g = self.gps_seen[src] = {"name": self.source_name(src), "first": round(now), "last": round(now)}; self.dirty = True
+                if now - g["last"] >= 60: g["last"] = round(now); self.dirty = True     # persisted about once a minute
+                name = self.source_name(src)
+                if name != g["name"] and name != str(src): g["name"] = name; self.dirty = True
             self.core_down_since = None if connected else (self.core_down_since or now)
             if pos:
                 self.last_pos_t = now
@@ -975,9 +984,27 @@ class AnchorWatch:
             with open(self.diag_dir / "core_gps_log.jsonl", "a", encoding="utf-8") as fh: fh.write(json.dumps(row) + "\n")
         except OSError as e: log.warning("GPS diagnostics: %s", e)
 
+    def gps_rows(self, now):
+        """Every GPS source ever seen, in the order they are tried (gps_sources first, then the others as read_boat
+        tries them), with its status: in_use, active, hold, raw (own GNSS fix), frozen, inactive or never (not seen)."""
+        prefs = [x.strip() for x in str(self.settings["gps_sources"]).split(",") if x.strip()]
+        live = {g["source"]: g for g in self.gps_list if g["age"] <= FRESH_S}
+        rest = sorted((s for s in set(self.gps_seen) | set(live) if s not in prefs),
+                      key=lambda s: (s not in live, -(self.gps_seen.get(s, {}).get("last") or 0)))
+        rows = []
+        for i, src in enumerate(prefs + rest):
+            g, seen = live.get(src), self.gps_seen.get(src)
+            if g: status = "in_use" if g["in_use"] else "frozen" if g["frozen"] else "hold" if g["hold"] else "raw" if g["raw"] else "active"
+            else: status = "inactive" if seen else "never"
+            rows.append({"source": src, "name": (g or {}).get("name") or (seen or {}).get("name") or self.source_name(src), "status": status,
+                         "sats": g["sats"] if g else None, "hdop": g["hdop"] if g else None,
+                         "last_seen": None if g or not seen else round(now - seen["last"]), "listed": src in prefs})
+        return rows
+
     def source_name(self, src):
         if src == CORE_SOURCE: return "254 (Orca Core 2)"
         label = self.store.source_label(src)
+        label = " ".join(re.sub(r"\s*(https?://|www\.)\S+", "", label or "").split())   # some devices put their web address in the model name
         return f"{src} ({label})" if label and not label.startswith("Source ") else str(src)
 
     def sounding(self, now=None):
@@ -1075,7 +1102,7 @@ class AnchorWatch:
                           "last_message_age": now - sa["last_message"] if sa["last_message"] else None}
         with self.lock:
             b = self.boat; pos = b["pos"]; a = self.anchor
-            out = {"time": now, "core": core, "ais_stream": ais_stream, "boat": b, "gps_list": self.gps_list, "gps_default": DEFAULT_GPS, "anchor": a, "settings": self.settings,
+            out = {"time": now, "core": core, "ais_stream": ais_stream, "boat": b, "gps_list": self.gps_list, "gps_rows": self.gps_rows(now), "gps_default": DEFAULT_GPS, "anchor": a, "settings": self.settings,
                    "alarms": [{"id": k, "text": self.ALARM_TEXT[k], "detail": v.get("detail", ""), "since": v["since"]} for k, v in self.alarms.items()],
                    "pending": {k: now - t for k, t in self.pending.items() if k not in self.alarms},
                    "sounding": self.sounding(now), "silenced_until": self.silenced_until if self.alarms else 0,

@@ -4,6 +4,18 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.13 — GPS source list
+
+### 1.13.0
+- **GPS sources** is now its own card in Settings, replacing the drop-down and the "GPS sources, in order" text
+  field: every GPS ever seen (remembered in `anchor_state.json`), in the order they are tried, with ▲ / ▼ to move one
+  up or down (saved straight away) and a *Default order* button. Each line shows whether it is **in use**, active
+  (standby, on hold, own GNSS fix), frozen, not active (with when it was last seen) or never seen, and the satellites
+  and HDOP of the active ones.
+- GPS names no longer carry the web address some devices put in their model name (Onwa), and runs of spaces are
+  collapsed (B&G ZG100).
+- The GPS diagnostics log no longer writes an empty route line at start-up.
+
 ## 1.12 — No sea charts, Windy forecast
 
 ### 1.12.2

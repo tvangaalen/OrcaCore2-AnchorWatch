@@ -224,6 +224,26 @@ class AnchorWatchTest(unittest.TestCase):
             self.assertEqual(len(list(Path(d.name).glob("gps_held_254_*.jsonl"))), 1)          # values recorded during the hold
         finally: d.cleanup()
 
+    def test_gps_rows_show_order_and_status(self):
+        self.s.boat(*offset(LAT, LON, 90, 2), src="127", frozen=False); self.w.tick(self.s.t); self.s.t += 1
+        rows = {r["source"]: r for r in self.w.state()["gps_rows"]}
+        self.assertEqual([r["source"] for r in self.w.state()["gps_rows"]], ["4", "127", "3", "254"])
+        self.assertEqual(rows["4"]["status"], "in_use"); self.assertEqual(rows["127"]["status"], "active")
+        self.assertEqual(rows["3"]["status"], "never"); self.assertIsNone(rows["3"]["last_seen"])
+        self.s.t += 20                                      # 4 and 127 go silent: 4 is now inactive, last seen 20 s ago
+        self.s.run(1); rows = {r["source"]: r for r in self.w.state()["gps_rows"]}
+        self.assertEqual(rows["4"]["status"], "inactive"); self.assertGreaterEqual(rows["4"]["last_seen"], 20)
+        self.assertEqual(rows["254"]["status"], "in_use")
+
+    def test_gps_seen_survives_restart_and_unlisted_sources_are_shown(self):
+        self.w.command({"action": "settings", "settings": {"gps_sources": "254,4"}})
+        self.s.boat(*offset(LAT, LON, 90, 2), src="9", frozen=False); self.w.tick(self.s.t); self.s.t += 1
+        self.assertEqual([r["source"] for r in self.w.state()["gps_rows"]][:3], ["254", "4", "9"])
+        self.assertFalse(self.w.state()["gps_rows"][2]["listed"])
+        self.w.save(); w2 = AnchorWatch(self.s.store, self.s.file)
+        self.assertEqual(set(w2.gps_seen), {"4", "9", "254"})
+        self.assertEqual(w2.gps_seen["254"]["name"], "254 (Orca Core 2)")
+
     def test_stationary_changes_are_logged(self):
         d = tempfile.TemporaryDirectory()
         try:

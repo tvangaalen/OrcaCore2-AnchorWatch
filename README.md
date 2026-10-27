@@ -160,10 +160,12 @@ when the API key is in place), otherwise it alerts after the interval.
   Setup: on aisstream.io *Sign in with GitHub*, create a key under *API Keys*, copy `aisstream.example.json` to
   `aisstream.json` (git-ignored) with the key, and press **Reconnect** under Alarm settings. Only the key and a box
   of about 6 x 8 km around the boat are sent; the box follows the boat.
-- **GPS source** (Alarm settings): *Automatic* tries `4 → 127 → 3 → 254` (B&G iGPS, ZG100, Onwa AIS GPS, Orca Core),
-  or pick one GPS to go first, e.g. **254, the Orca Core 2's own GPS**: with the rest of the NMEA 2000 network switched
-  off to save the battery it is the only one left, and the watch keeps working on it. The next source in line takes
-  over when one stops. The list shows which GPS is in use, its satellites and HDOP.
+- **GPS sources** (Settings): a list of every GPS ever seen (kept in `anchor_state.json`), in the order they are
+  tried, with ▲ / ▼ to change that order (saved straight away) and *Default order* (`4 → 127 → 3 → 254`: B&G iGPS,
+  ZG100, Onwa AIS GPS, Orca Core). Each line shows its status: **IN USE** (green), *Active, standby*, *Active, on
+  hold* or *own GNSS fix* (amber), *Frozen, skipped* (red), *Not active* with when it was last seen, or *Never seen*;
+  active ones with satellites and HDOP. The first active GPS is used and the next one takes over when it stops. Put
+  **254, the Orca Core 2's own GPS** first when the rest of the NMEA 2000 network is off to save the battery.
 - **Frozen-position check:** the Core's position is not always live while it flags the boat as stationary (on
   2026-10-12, with the other receivers on, it stayed at one exact value for minutes; on 2026-10-16, Core alone, it
   kept moving). A frozen position would hide a slow drag, so any GPS whose position has not changed at all for 60 s
