@@ -997,7 +997,8 @@ class AnchorWatch:
             if g: status = "in_use" if g["in_use"] else "frozen" if g["frozen"] else "hold" if g["hold"] else "raw" if g["raw"] else "active"
             else: status = "inactive" if seen else "never"
             rows.append({"source": src, "name": (g or {}).get("name") or (seen or {}).get("name") or self.source_name(src), "status": status,
-                         "sats": g["sats"] if g else None, "hdop": g["hdop"] if g else None,
+                         "sats": g["sats"] if g and g["sats"] is not None and 0 < g["sats"] < 100 else None,   # 253-255 = not available (NMEA 2000)
+                         "hdop": g["hdop"] if g else None,
                          "last_seen": None if g or not seen else round(now - seen["last"]), "listed": src in prefs})
         return rows
 

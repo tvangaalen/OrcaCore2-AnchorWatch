@@ -230,6 +230,9 @@ class AnchorWatchTest(unittest.TestCase):
         self.assertEqual([r["source"] for r in self.w.state()["gps_rows"]], ["4", "127", "3", "254"])
         self.assertEqual(rows["4"]["status"], "in_use"); self.assertEqual(rows["127"]["status"], "active")
         self.assertEqual(rows["3"]["status"], "never"); self.assertIsNone(rows["3"]["last_seen"])
+        self.s.put(navigation__gnss__127__satellites=253); self.s.boat(*offset(LAT, LON, 90, 2), src="127", frozen=False)
+        self.w.tick(self.s.t); self.s.t += 1
+        self.assertIsNone({r["source"]: r for r in self.w.state()["gps_rows"]}["127"]["sats"])   # 253 = not available
         self.s.t += 20                                      # 4 and 127 go silent: 4 is now inactive, last seen 20 s ago
         self.s.run(1); rows = {r["source"]: r for r in self.w.state()["gps_rows"]}
         self.assertEqual(rows["4"]["status"], "inactive"); self.assertGreaterEqual(rows["4"]["last_seen"], 20)

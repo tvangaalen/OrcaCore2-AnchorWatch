@@ -14,6 +14,7 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
   and HDOP of the active ones.
 - GPS names no longer carry the web address some devices put in their model name (Onwa), and runs of spaces are
   collapsed (B&G ZG100).
+- Satellite counts of 253-255 (NMEA 2000 "not available", sent by the Onwa) are not shown.
 - The GPS diagnostics log no longer writes an empty route line at start-up.
 
 ## 1.12 — No sea charts, Windy forecast
