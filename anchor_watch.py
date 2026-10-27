@@ -20,6 +20,9 @@ frozen. The Core's own GPS is the exception: it has a static hold. Recordings of
 is about 10 m away (every release jumped 10.0-10.1 m). While its receiver is alive (the fix time keeps advancing)
 such a held 254 position is used, marked "hold": it is never more than about HOLD_M off. A live receiver is
 preferred over a held 254, whatever the order, so with the instruments on the track stays smooth. While a source is held, its GPS values are written to recordings/ (local only, never committed) for analysis.
+What starts the hold is not known yet (a power cycle of the Core clears it). To find out, the Core's route state
+(waypoints, arrival circle entered, waypoint crossed) is logged, and every start and end of a hold goes to
+recordings/core_gps_log.jsonl together with that route state and the stationary flag.
 
 State (anchor, settings, track, events) is kept in anchor_state.json so a restart does not lose the watch.
 
@@ -41,7 +44,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.12.0"
+VERSION = "1.12.1"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -50,6 +53,10 @@ FROZEN_S = 60           # a position that has not changed at all for this long i
 DIAG_S = 600            # how long the GPS values of a held source are recorded
 HOLD_M = 10             # the Core's GPS (254) holds its fix until the boat is this far away (measured, see module doc)
 HOLD_LOG_S = 3600       # "on hold" is logged at most once per this period (the hold comes and goes every few minutes)
+# the Core's route state, logged on every change (is arriving at a waypoint what starts the 254 hold?)
+ROUTE_KEYS = {"navigation.data.254.originWaypoint": "from waypoint", "navigation.data.254.destinationWaypoint": "to waypoint",
+              "navigation.data.254.entered": "arrival circle entered", "navigation.data.254.crossed": "waypoint crossed",
+              "navigation.state.254.status": "navigation status"}
 DEFAULT_GPS = "4,127,3,254"
 TRACK_EVERY_S = 5
 AIS_RANGE_M = 600
@@ -738,6 +745,8 @@ class AnchorWatch:
         self.hold = set()                  # the Core's GPS on static hold: still used (within HOLD_M)
         self.dt_seen = {}                  # source -> (fix time, time it last changed): is the receiver still alive?
         self.hold_logged = None; self.hold_was = set()
+        self.route_seen = None             # last route state of the Core (ROUTE_KEYS label -> value)
+        self.hold_since = None             # start of the current 254 hold
         self.lock = threading.RLock()
         self.settings = dict(DEFAULTS)
         self.anchor = None                 # {"lat", "lon", "radius", "set_at"}
@@ -814,10 +823,23 @@ class AnchorWatch:
             hold = {src for src in held["position"] - raw if src == CORE_SOURCE and src in gsrcs and gsrcs[src]["age"] <= FRESH_S
                     and src in self.dt_seen and now - self.dt_seen[src][1] <= FRESH_S}
             frozen = held["position"] - raw - hold
+            route = self.route_state(sensors)
+            if route != self.route_seen:
+                if route and self.route_seen:
+                    ch = ", ".join(f"{k} {self.route_seen.get(k)} → {v}" for k, v in route.items() if self.route_seen.get(k) != v)
+                    self.event(f"Orca Core route: {ch}", now)
+                elif route: self.event("Orca Core route: " + ", ".join(f"{k} {v}" for k, v in route.items()), now)
+                self.core_log(now, "route", sensors, route)
+                self.route_seen = route
+            if CORE_SOURCE in hold and CORE_SOURCE not in self.hold:
+                self.hold_since = now; self.core_log(now, "hold start", sensors, route)
+            elif CORE_SOURCE in self.hold and CORE_SOURCE not in hold and self.hold_since is not None:
+                self.core_log(now, "hold end", sensors, route, held_s=round(now - self.hold_since)); self.hold_since = None
             if hold - self.hold and (self.hold_logged is None or now - self.hold_logged >= HOLD_LOG_S):
                 self.hold_logged = now
                 self.event(f"GPS {self.source_name(CORE_SOURCE)} on hold: the Core keeps its fix while the boat lies still and moves it "
                            f"on after about {HOLD_M} m. Still used; position within about {HOLD_M} m", now)
+                if self.diag_dir and CORE_SOURCE not in self.diag: self.start_diag(CORE_SOURCE, now)
             for src in raw - self.raw - self.frozen:
                 self.event(f"GPS {self.source_name(src)}: position unchanged for {FROZEN_S} s, its own GNSS fix still changes: using that", now)
             for src in frozen - self.frozen:
@@ -921,11 +943,28 @@ class AnchorWatch:
         for src, (f, end) in list(self.diag.items()):
             if now > end: del self.diag[src]; continue
             keys = [k for k in sensors if f".{src}." in k and k.startswith(("navigation.position.", "navigation.gnss.",
-                    "navigation.motion.", "navigation.cogsog.", "navigation.time.", "historical."))]
+                    "navigation.motion.", "navigation.cogsog.", "navigation.time.", "historical.", "navigation.data.",
+                    "navigation.state.", "navigation.xte."))]
             row = {"t": round(now, 1), "values": {k: [sensors[k][0], round(now - sensors[k][1], 1)] for k in sorted(keys)}}
             try:
                 with open(f, "a", encoding="utf-8") as fh: fh.write(json.dumps(row) + "\n")
             except OSError as e: log.warning("GPS diagnostics: %s", e); del self.diag[src]
+
+    @staticmethod
+    def route_state(sensors):
+        """The Core's route state (ROUTE_KEYS label -> value), {} without route data."""
+        return {label: sensors[k][0] for k, label in ROUTE_KEYS.items() if k in sensors}
+
+    def core_log(self, now, what, sensors, route, **extra):
+        """One line in recordings/core_gps_log.jsonl: a 254 hold starting or ending, or a route change."""
+        if not self.diag_dir: return
+        st = sensors.get(f"navigation.motion.{CORE_SOURCE}.stationary")
+        row = {"t": round(now, 1), "time": datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M:%S"), "what": what,
+               "stationary": st[0] if st else None, "route": route, **extra}
+        try:
+            self.diag_dir.mkdir(exist_ok=True)
+            with open(self.diag_dir / "core_gps_log.jsonl", "a", encoding="utf-8") as fh: fh.write(json.dumps(row) + "\n")
+        except OSError as e: log.warning("GPS diagnostics: %s", e)
 
     def source_name(self, src):
         if src == CORE_SOURCE: return "254 (Orca Core 2)"

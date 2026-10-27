@@ -6,6 +6,12 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ## 1.12 — No sea charts, Windy forecast
 
+### 1.12.1
+- **What starts the Core's GPS hold?** To find out, the Orca Core's route state (from/to waypoint, arrival circle
+  entered, waypoint crossed, navigation status) now shows in the event log on every change, and each start and end of
+  a 254 hold is written to `recordings/core_gps_log.jsonl` (local only) with that route state and the stationary flag.
+  A hold also starts a 10-minute recording again (since 1.11.0 a hold no longer did), now with the route values.
+
 ### 1.12.0
 - **Sea chart layer removed** (the Spanish IHM charts: they only cover Spanish waters). The layers are now *Street
   map*, *Satellite* and *Plain*; the *Seamarks* overlay (OpenSeaMap) stays. The IHM credit is gone from Credits.

@@ -202,6 +202,28 @@ class AnchorWatchTest(unittest.TestCase):
             self.assertGreaterEqual(len(rows), 4); self.assertIn("navigation.gnss.254.latitude", rows[-1]["values"])
         finally: d.cleanup()
 
+    def test_route_changes_are_logged_with_the_hold(self):
+        d = tempfile.TemporaryDirectory()
+        try:
+            self.w.diag_dir = Path(d.name)
+            self.w.command({"action": "settings", "settings": {"gps_sources": "254,4,127,3"}})
+            self.s.put(navigation__data__254__originWaypoint=1, navigation__data__254__destinationWaypoint=2,
+                       navigation__data__254__entered=0, navigation__data__254__crossed=0)
+            self.s.t += 11
+            for i in range(80):
+                if i == 5: self.s.put(navigation__data__254__entered=1)      # arrives at waypoint 2
+                self.core_static_hold(*offset(LAT, LON, i % 360, 3)); self.w.tick(self.s.t); self.s.t += 1
+            texts = [e["text"] for e in self.w.events]
+            self.assertIn("Orca Core route: from waypoint 1, to waypoint 2, arrival circle entered 0, waypoint crossed 0", texts)
+            self.assertIn("Orca Core route: arrival circle entered 0 → 1", texts)
+            for _ in range(3): self.core_static_hold(*offset(LAT, LON, 0, 20)); self.w.tick(self.s.t); self.s.t += 1   # released
+            rows = [json.loads(x) for x in (Path(d.name) / "core_gps_log.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([r["what"] for r in rows], ["route", "route", "hold start", "hold end"])
+            self.assertEqual(rows[2]["route"]["arrival circle entered"], 1); self.assertEqual(rows[2]["stationary"], 1)
+            self.assertGreater(rows[3]["held_s"], 0)
+            self.assertEqual(len(list(Path(d.name).glob("gps_held_254_*.jsonl"))), 1)          # values recorded during the hold
+        finally: d.cleanup()
+
     def test_frozen_raw_receiver_fails_over_and_recovers(self):
         for _ in range(62):                                 # source 4 stuck on one value, 127 alive
             self.s.put(navigation__position__4__latitude=LAT, navigation__position__4__longitude=LON, navigation__gnss__4__method=1)

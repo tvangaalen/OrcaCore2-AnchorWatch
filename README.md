@@ -176,7 +176,10 @@ when the API key is in place), otherwise it alerts after the interval.
   *GPS hold* in the Position tile: it is within about 10 m, so a drag shows at the latest about 10 m later.
   A live receiver is preferred over a held 254, so with the instruments on the track stays smooth. With no
   usable GPS left, the GPS alarm goes off. While a source is held, its GPS values are recorded for 10 min to
-  `recordings/gps_held_*.jsonl` (local only, git-ignored), to find out why it held.
+  `recordings/gps_held_*.jsonl` (local only, git-ignored), to find out why it held. What starts the 254 hold is
+  not known yet (a power cycle of the Core clears it). The Core's route state (from/to waypoint, arrival circle
+  entered, waypoint crossed) is logged on every change, and each hold start and end goes to
+  `recordings/core_gps_log.jsonl` with that route state, to see whether arriving at a waypoint starts it.
 - With the instruments off there is no depth or wind; the tiles then say that the depth or wind alarm is inactive.
 - Anchor, settings, track and log are kept in `anchor_state.json`, so a restart resumes the watch.
 
