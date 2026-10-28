@@ -356,6 +356,11 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
             <button class="small" id="netAisCheck">Reconnect</button>
           </div>
           <div class="note" id="netAisStatus" style="margin-top:4px"></div>
+          <div class="row" style="justify-content:space-between;margin-top:10px">
+            <label class="check"><input type="checkbox" data-s="nfl_tracking"> Position to noforeignland.com</label>
+            <button class="small" id="nflSend">Send now</button>
+          </div>
+          <div class="note" id="nflStatus" style="margin-top:4px"></div>
         <div class="row">
           <label class="f">Track kept (h)<input type="number" data-s="track_hours" min="1" max="72"></label>
         </div>
@@ -514,6 +519,12 @@ function render(){
     :(na.last_error?`<span style="color:var(--bad)">${esc(na.last_error)}</span> `:'')
      +(na.connected?`Connected · ${na.ships} ship${na.ships===1?'':'s'} in the area${na.last_message?' · last report '+clock(na.last_message):''}.`:'Connecting…')
      +' Ships from the own AIS receiver always take priority; internet ships are drawn hollow.';
+  const nf=S.nfl||{}, nfst=$('nflStatus');
+  nfst.innerHTML=!nf.configured?'Not set up: put your Boat API key and the NFL integration key in <b>nfl.json</b> on the watch PC (see nfl.example.json), then press <b>Send now</b>.'
+    :!S.settings.nfl_tracking?'Off.'
+    :(nf.last_error?`<span style="color:var(--bad)">Last upload failed: ${esc(nf.last_error)}</span> `:'')
+     +'Every 10 min while under way (a point per 80 m), once a day at anchor.'
+     +(nf.sent_t?` Last position sent: ${dayTime(nf.sent_t)}${nf.last_ok?` (${nf.last_count} point${nf.last_count===1?'':'s'} at ${clock(nf.last_ok)})`:''}.`:'');
   $('footer').textContent=`Anchor Watch ${S.version||''} · not for navigation`;
   drawMap();
 }
@@ -806,6 +817,7 @@ $('gpsList').onclick=e=>{const b=e.target.closest('button[data-mv]');if(!b||b.di
   const r=S.gps_rows;[r[i],r[j]]=[r[j],r[i]];renderGps();                  // show the move at once, the next update confirms it
   saveGpsOrder(src.join(','))};
 $('gpsDefault').onclick=()=>saveGpsOrder(S.gps_default);
+$('nflSend').onclick=()=>cmd({action:'nfl_send'},$('settingsMsg')).then(ok=>{if(ok)$('settingsMsg').textContent='Upload requested'});
 $('netAisCheck').onclick=()=>cmd({action:'net_ais_check'},$('settingsMsg')).then(ok=>{if(ok)$('settingsMsg').textContent='Reconnecting internet AIS'});
 $('alarmTest').onclick=()=>{if(confirm('Send a real test alarm? Your phone rings every 30 s until you tap Acknowledge in Pushover or press "Stop test alarm" (at most 10 minutes).'))
   cmd({action:'push_alarm_test'},$('settingsMsg')).then(ok=>{if(ok)$('settingsMsg').textContent='Test alarm sent'})};

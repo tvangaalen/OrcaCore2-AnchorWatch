@@ -3,11 +3,11 @@
 import tempfile, unittest
 from pathlib import Path
 
-import asyncio, io, json, math, os, time, urllib.error
+import asyncio, io, json, math, os, time, urllib.error, urllib.parse
 from datetime import datetime, timezone
 from unittest import mock
 
-from anchor_watch import AnchorWatch, InternetAIS, Pushover, StillAlive, TileCache, read_ais, dist_bearing_m, offset
+from anchor_watch import AnchorWatch, InternetAIS, NoForeignLand, Pushover, StillAlive, TileCache, read_ais, dist_bearing_m, offset
 from orca_reader import Store
 
 LAT, LON = 39.0, 1.5        # an arbitrary point at sea; the tests only use positions relative to it
@@ -601,6 +601,105 @@ class StillAliveTest(unittest.TestCase):
             w.command({"action": "settings", "settings": {"alive_minutes": 15}})
             self.assertIsNone(a.synced); self.assertEqual(w.settings["alive_minutes"], 15)
             self.assertEqual(w.state()["alive"]["every_s"], 300)
+        finally: s.dir.cleanup()
+
+
+class NoForeignLandTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory(); self.f = Path(self.dir.name, "nfl.json")
+        self.track = []; self.on = True; self.events = []; self.posts = []; self.fail = None; self.reply = b'{"status":"ok"}'
+
+    def tearDown(self): self.dir.cleanup()
+
+    def make(self, sent=None):
+        self.f.write_text(json.dumps({"boat_api_key": "boat-key", "api_key": "app-key"}), encoding="utf-8")
+        return NoForeignLand(self.f, lambda: [list(p) for p in self.track], lambda: self.on, sent=sent,
+                             on_event=lambda t, k: self.events.append((k, t)), start=False)
+
+    def urlopen(self, req, timeout=None):
+        self.posts.append(req)
+        if self.fail: raise self.fail
+        return mock.MagicMock(**{"__enter__.return_value.read.return_value": self.reply})
+
+    def step(self, n, now):
+        with mock.patch("urllib.request.urlopen", self.urlopen): n.step(now)
+
+    def sail(self, t0, n, every_s=5, step_m=10):
+        """n track points, every_s apart, step_m apart heading north (as the watch records them)."""
+        lat, lon = (self.track[-1][1], self.track[-1][2]) if self.track else (LAT, LON)
+        for i in range(n):
+            lat, lon = offset(lat, lon, 0, step_m); self.track.append([t0 + i * every_s, round(lat, 7), round(lon, 7)])
+
+    def body(self, req):
+        return {k: v[0] for k, v in urllib.parse.parse_qs(req.data.decode()).items()}
+
+    def test_track_is_thinned_and_sent_with_both_keys(self):
+        n = self.make(); self.sail(1000, 120)                 # 10 min at 2 m/s (about 4 kn)
+        self.step(n, 1600)
+        self.assertEqual(len(self.posts), 1); req = self.posts[0]
+        self.assertEqual(req.full_url, NoForeignLand.URL); self.assertEqual(req.get_method(), "POST")
+        self.assertEqual(req.get_header("X-nfl-api-key"), "app-key")
+        b = self.body(req); track = json.loads(b["track"])
+        self.assertEqual(b["boatApiKey"], "boat-key"); self.assertEqual(int(b["timestamp"]), track[-1][0])
+        self.assertEqual(track[0], [1000000, self.track[0][1], self.track[0][2]])     # milliseconds
+        for a, c in zip(track, track[1:]):
+            self.assertGreaterEqual(c[0] - a[0], 60000); self.assertGreaterEqual(dist_bearing_m(a[1], a[2], c[1], c[2])[0], 80)
+        self.assertEqual(n.sent["t"], track[-1][0] / 1000); self.assertEqual(n.last_count, len(track))
+
+    def test_uploads_every_10_min_and_never_twice(self):
+        n = self.make(); self.sail(1000, 12); self.step(n, 1060)
+        self.sail(1065, 12); self.step(n, 1200)
+        self.assertEqual(len(self.posts), 1)                  # next upload only 10 min later
+        self.step(n, 1700); self.assertEqual(len(self.posts), 2)
+        first, second = (json.loads(self.body(r)["track"]) for r in self.posts)
+        self.assertGreater(second[0][0], first[-1][0])
+        self.step(n, 2400); self.assertEqual(len(self.posts), 2)    # nothing new: nothing sent
+
+    def test_offline_points_wait_and_go_up_together(self):
+        n = self.make(); self.fail = urllib.error.URLError("no internet")
+        self.sail(1000, 120); self.step(n, 1600); self.sail(1600, 120); self.step(n, 1900)
+        self.assertEqual([k for k, _ in self.events], ["warn"]); self.assertIn("no internet", n.last_error); self.assertIsNone(n.sent)
+        self.fail = None; self.step(n, 2200)
+        self.assertEqual([k for k, _ in self.events], ["warn", "ok"]); self.assertIsNone(n.last_error)
+        track = json.loads(self.body(self.posts[-1])["track"])
+        self.assertEqual(track[0][0], 1000000); self.assertGreater(track[-1][0], 2100000)
+
+    def test_rejected_upload_shows_the_reason(self):
+        n = self.make(); self.sail(1000, 2)
+        self.fail = urllib.error.HTTPError(NoForeignLand.URL, 401, "Unauthorized", {}, io.BytesIO(b"invalid boat api key"))
+        self.step(n, 1010); self.assertEqual(n.last_error, "HTTP 401: invalid boat api key"); self.assertIsNone(n.sent)
+        self.fail = None; self.reply = b'{"status":"error","message":"bad track"}'; self.step(n, 1400)
+        self.assertEqual(n.last_error, "bad track"); self.assertIsNone(n.sent)
+        self.reply = b"<html>"; self.step(n, 1800); self.assertIsNotNone(n.sent)    # 2xx, odd reply: stored, not resent
+
+    def test_at_anchor_one_keepalive_a_day(self):
+        self.sail(1000, 1); n = self.make(sent={"t": 1000.0, "lat": self.track[0][1], "lon": self.track[0][2]})
+        lat, lon = self.track[0][1:]
+        for t in range(1005, 1000 + 86400 + 600, 5): self.track.append([t, lat + 1e-6 * (t % 3), lon])   # jitter, no move
+        self.step(n, 50000); self.assertEqual(self.posts, [])
+        self.step(n, 1000 + 86400 + 590); self.assertEqual(len(self.posts), 1)
+        self.assertEqual(len(json.loads(self.body(self.posts[0])["track"])), 1)
+        self.step(n, 1000 + 86400 + 1300); self.assertEqual(len(self.posts), 1)
+
+    def test_keepalive_needs_a_current_position(self):
+        self.sail(1000, 1); n = self.make(sent={"t": 1000.0, "lat": self.track[0][1], "lon": self.track[0][2]})
+        self.step(n, 1000 + 2 * 86400); self.assertEqual(self.posts, [])      # GPS gone: nothing old is sent as current
+
+    def test_off_or_not_set_up_sends_nothing(self):
+        n = self.make(); self.sail(1000, 20); self.on = False; self.step(n, 1200); self.assertEqual(self.posts, [])
+        self.f.write_text(json.dumps({"boat_api_key": "boat-key"}), encoding="utf-8")
+        self.assertIn("support@noforeignland.com", n.reload()); self.on = True; self.step(n, 1300); self.assertEqual(self.posts, [])
+        self.f.unlink(); self.assertIn("not found", n.reload())
+
+    def test_last_sent_point_survives_a_restart(self):
+        s = Sim(); w = s.watch
+        try:
+            w.nfl = n = self.make(); n.sent = {"t": 1000.0, "lat": LAT, "lon": LON}
+            w.save(); w2 = AnchorWatch(s.store, s.file)
+            self.assertEqual(w2.nfl_sent, n.sent)
+            w.command({"action": "settings", "settings": {"nfl_tracking": False}})
+            with self.assertRaises(ValueError): w.command({"action": "nfl_send"})
+            self.assertEqual(w.state()["nfl"]["sent_t"], 1000.0)
         finally: s.dir.cleanup()
 
 

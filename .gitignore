@@ -16,6 +16,9 @@ still_alive.json
 # aisstream.io API key for internet AIS (aisstream.example.json shows the format)
 aisstream.json
 
+# noforeignland.com Boat API key and integration key (nfl.example.json shows the format)
+nfl.json
+
 # Runtime data: the anchor watch state holds the boat's positions and track
 anchor_state.json
 anchor_state.tmp

@@ -4,6 +4,17 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.14 — noforeignland.com tracking
+
+### 1.14.0
+- **Position to noforeignland.com** (Settings > Other settings): the boat's track goes to noforeignland.com Boat
+  tracking automatically, like NFL's Signal K plugin does: a point per 80 m moved (at least 60 s apart), uploaded
+  every 10 min, held back while offline and sent together later, and once a day at anchor so the boat stays active.
+  Only points from the watch's own track are used, so a frozen GPS is never sent. **Send now** uploads straight away.
+  Needs `nfl.json` (git-ignored, see `nfl.example.json`) with the Boat API key and an integration key from NFL.
+
+---
+
 ## 1.13 — GPS source list
 
 ### 1.13.0

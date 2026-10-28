@@ -46,7 +46,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.13.0"
+VERSION = "1.14.0"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -79,6 +79,7 @@ DEFAULTS = {
     "push_alerts": True,      # send alarms to the phone through Pushover (needs pushover.json)
     "alive_minutes": 60.0,    # still-alive check: alert from outside after this long without a sign of life, 0 = off
     "internet_ais": True,     # add AIS targets from aisstream.io (needs aisstream.json); the local receiver always wins
+    "nfl_tracking": True,     # send the track to noforeignland.com (needs nfl.json)
     "track_hours": 24,
     "bow_height": 1.2,        # m from the waterline to the bow roller, for the chain advice
     "chain_formula": "5*(D+B)",  # recommended chain; D = max depth next 24 h, B = bow height, LOA (see ChainFormula)
@@ -732,6 +733,112 @@ class StillAlive:
             self.wake.wait(timeout=5); self.wake.clear()
 
 
+# ---------------------------------------------------------------- noforeignland.com boat tracking
+
+
+class NoForeignLand:
+    """Sends the boat's track to noforeignland.com (Boat tracking), so the boat's position there follows the boat.
+
+    Same API as NFL's own Signal K plugin (github.com/noforeignland/nfl-signalk): a form POST with timestamp, track
+    ([[ms, lat, lon], ...]) and boatApiKey, plus an integration key in the X-NFL-API-Key header. That plugin's
+    built-in key must not be reused: NFL hands out a key per integration (ask support@noforeignland.com).
+    Config, a local file that is never committed:
+    {"boat_api_key": "<Account > Settings > Boat tracking > API Key>", "api_key": "<integration key from NFL>"}.
+
+    Points come from the watch's own track, so a frozen GPS never gets in. They are thinned like the plugin does: a point
+    goes in only when the boat moved MIN_MOVE_M from the previous one and at least MIN_GAP_S later. New points go up as
+    one track every UPLOAD_EVERY_S; while the internet is down they wait (as long as the track keeps them, track_hours)
+    and go up together later. At anchor nothing moves, so once per KEEPALIVE_S the current position is sent anyway to
+    keep the boat active on the website. What was sent last is kept in the state file, so a restart sends nothing twice.
+    """
+    URL = "https://www.noforeignland.com/home/api/v1/boat/tracking/track"
+    MIN_MOVE_M = 80
+    MIN_GAP_S = 60
+    UPLOAD_EVERY_S = 600
+    KEEPALIVE_S = 86400
+    RETRY_S = 300
+    FRESH_S = 60        # the keepalive only sends a position younger than this
+
+    def __init__(self, cfg_file, points, enabled, sent=None, on_event=None, start=True):
+        self.cfg_file, self.points, self.enabled = Path(cfg_file), points, enabled   # callables: track [[t, lat, lon], ...], on/off
+        self.on_event = on_event or (lambda text, kind: None)
+        self.cfg = None; self.sent = sent          # {"t", "lat", "lon"}: last point NFL accepted
+        self.last_ok = self.last_error = None; self.last_count = 0
+        self.next_try = 0.0; self.failing = False
+        self.wake = threading.Event()
+        self.reload()
+        if start: threading.Thread(target=self._worker, daemon=True).start()
+
+    def reload(self):
+        """(Re)reads the config file; returns an error text, or None when it is usable."""
+        try: d = json.loads(self.cfg_file.read_text(encoding="utf-8"))
+        except FileNotFoundError: self.cfg = None; return f"{self.cfg_file.name} not found"
+        except Exception as e: self.cfg = None; return f"{self.cfg_file.name}: {type(e).__name__}: {e}"
+        boat, key = str(d.get("boat_api_key") or "").strip(), str(d.get("api_key") or "").strip()
+        if not boat: self.cfg = None; return f"{self.cfg_file.name}: boat_api_key is missing (noforeignland.com: Account > Settings > Boat tracking)"
+        if not key: self.cfg = None; return f"{self.cfg_file.name}: api_key is missing (ask support@noforeignland.com for an integration key)"
+        self.cfg = {"boat_api_key": boat, "api_key": key}
+        return None
+
+    @property
+    def configured(self): return self.cfg is not None
+
+    def poke(self):
+        """Send what is waiting straight away."""
+        self.next_try = 0.0; self.wake.set()
+
+    def pending(self, now):
+        """The points not sent yet, thinned to MIN_MOVE_M / MIN_GAP_S; the keepalive point when nothing moved for a day."""
+        pts = self.points(); ref = self.sent; out = []
+        for t, lat, lon in pts:
+            if ref is not None and (t - ref["t"] < self.MIN_GAP_S or dist_bearing_m(ref["lat"], ref["lon"], lat, lon)[0] < self.MIN_MOVE_M):
+                continue
+            ref = {"t": t, "lat": lat, "lon": lon}; out.append([t, lat, lon])
+        if not out and pts and now - pts[-1][0] <= self.FRESH_S and (self.sent is None or now - self.sent["t"] >= self.KEEPALIVE_S):
+            out.append(list(pts[-1]))
+        return out
+
+    def _post(self, track):
+        body = urllib.parse.urlencode({"timestamp": str(int(track[-1][0] * 1000)),
+                                       "track": json.dumps([[int(t * 1000), lat, lon] for t, lat, lon in track]),
+                                       "boatApiKey": self.cfg["boat_api_key"]}).encode()
+        req = urllib.request.Request(self.URL, data=body, method="POST",
+                                     headers={"User-Agent": f"OrcaCore2-AnchorWatch/{VERSION}", "X-NFL-API-Key": self.cfg["api_key"],
+                                              "Content-Type": "application/x-www-form-urlencoded"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r: raw = r.read()
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.code}: {e.read(300).decode('utf-8', 'replace').strip() or e.reason}") from None
+        # any 2xx means NFL stored the track: an unreadable reply must not make us send it again (duplicate track)
+        try: reply = json.loads(raw)
+        except ValueError: return
+        if isinstance(reply, dict) and reply.get("status") not in (None, "ok"):
+            raise RuntimeError(str(reply.get("message") or reply.get("status")))
+
+    def step(self, now=None):
+        """One round of the worker: upload the waiting points when due. Tests call it directly."""
+        now = now or time.time()
+        if not self.configured or not self.enabled() or now < self.next_try: return
+        track = self.pending(now)
+        if not track: return
+        self.next_try = now + self.UPLOAD_EVERY_S
+        try: self._post(track)
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}" if not isinstance(e, RuntimeError) else str(e)
+            self.next_try = now + self.RETRY_S
+            if not self.failing: self.failing = True; self.on_event(f"noforeignland.com upload failed (will retry): {self.last_error}", "warn")
+            return
+        t, lat, lon = track[-1]; self.sent = {"t": t, "lat": lat, "lon": lon}
+        self.last_ok, self.last_error, self.last_count = now, None, len(track)
+        if self.failing: self.failing = False; self.on_event("noforeignland.com uploads get through again", "ok")
+
+    def _worker(self):
+        while True:
+            try: self.step()
+            except Exception: log.exception("noforeignland step failed")
+            self.wake.wait(timeout=30); self.wake.clear()
+
+
 # ---------------------------------------------------------------- the watch
 
 
@@ -774,6 +881,8 @@ class AnchorWatch:
         self.alive = None                  # StillAlive, set by main()
         self.netais = None                 # InternetAIS, set by main()
         self.tide = None                   # TideFeed, set by main()
+        self.nfl = None                    # NoForeignLand, set by main()
+        self.nfl_sent = None               # last point noforeignland.com accepted (kept in the state file)
         self.last_depth = None             # {"d", "t", "surface"}: last sounder reading, used while the sounder is off
         self.load()
 
@@ -790,12 +899,14 @@ class AnchorWatch:
         self.anchor = d.get("anchor"); self.max_dist = d.get("max_dist", 0.0)
         self.track = deque(d.get("track", [])); self.events.extend(d.get("events", [])); self.last_depth = d.get("last_depth")
         self.gps_seen = {str(k): v for k, v in (d.get("gps_seen") or {}).items() if isinstance(v, dict)}
+        self.nfl_sent = d.get("nfl_sent") if isinstance(d.get("nfl_sent"), dict) else None
         if self.anchor: log.info("anchor watch restored: %.6f, %.6f radius %.0f m", self.anchor["lat"], self.anchor["lon"], self.anchor["radius"])
 
     def save(self):
         with self.lock:
             d = {"settings": self.settings, "anchor": self.anchor, "max_dist": self.max_dist,
-                 "track": list(self.track), "events": list(self.events), "last_depth": self.last_depth, "gps_seen": self.gps_seen}
+                 "track": list(self.track), "events": list(self.events), "last_depth": self.last_depth, "gps_seen": self.gps_seen,
+                 "nfl_sent": self.nfl.sent if self.nfl is not None else self.nfl_sent}
             self.dirty = False
         tmp = self.state_file.with_suffix(".tmp")
         tmp.write_text(json.dumps(d, separators=(",", ":")), encoding="utf-8"); os.replace(tmp, self.state_file)
@@ -889,6 +1000,7 @@ class AnchorWatch:
                 if not self.track or now - self.track[-1][0] >= TRACK_EVERY_S:
                     self.track.append([round(now, 1), round(pos["lat"], 7), round(pos["lon"], 7)]); self.dirty = True
                 while self.track and self.track[0][0] < now - s["track_hours"] * 3600: self.track.popleft()
+            if self.nfl is not None and self.nfl.sent != self.nfl_sent: self.nfl_sent = self.nfl.sent; self.dirty = True
 
             cond = {}
             if self.anchor:
@@ -1065,6 +1177,7 @@ class AnchorWatch:
                     self.event("Settings changed: " + ", ".join(f"{k} {self.settings[k]!r} → {v!r}".replace("'", "") for k, v in changed.items()), now)
                     self.settings.update(changed)
                     if self.alive is not None and "alive_minutes" in changed: self.alive.poke()
+                    if self.nfl is not None and changed.get("nfl_tracking"): self.nfl.poke()
             elif act in ("push_alarm_test", "push_alarm_stop"):
                 if self.notifier is None: raise ValueError("Push alerts are not available")
                 err = self.notifier.reload()
@@ -1086,6 +1199,12 @@ class AnchorWatch:
                 err = self.netais.reload()
                 if err: raise ValueError(f"Internet AIS is not set up: {err}")
                 self.event("Internet AIS: key re-read, reconnecting", now)
+            elif act == "nfl_send":
+                if self.nfl is None: raise ValueError("noforeignland.com tracking is not available")
+                err = self.nfl.reload()
+                if err: raise ValueError(f"noforeignland.com tracking is not set up: {err}")
+                if not s["nfl_tracking"]: raise ValueError("noforeignland.com tracking is off")
+                self.nfl.poke(); self.event("noforeignland.com upload requested", now)
             elif act == "clear_track":
                 self.track.clear(); self.track_gen += 1; self.max_dist = 0.0; self.event("New track started (old track and max swing deleted)", now)
             else: raise ValueError(f"Unknown action {act!r}")
@@ -1116,6 +1235,10 @@ class AnchorWatch:
                              "last_error": self.alive.last_error if self.alive else None,
                              "note": self.alive.sync_note if self.alive else None,
                              "every_s": self.alive.ping_every(self.settings["alive_minutes"]) if self.alive else None},
+                   "nfl": {"configured": bool(self.nfl and self.nfl.configured),
+                           "last_ok": self.nfl.last_ok if self.nfl else None, "last_count": self.nfl.last_count if self.nfl else 0,
+                           "last_error": self.nfl.last_error if self.nfl else None,
+                           "sent_t": (self.nfl.sent or {}).get("t") if self.nfl else None},
                    "track_points": len(self.track), "track_start": self.track[0][0] if self.track else None, "version": VERSION,
                    "gps_age": now - self.last_pos_t if self.last_pos_t else None}
             if a and pos:
@@ -1324,6 +1447,7 @@ def main():
     ap.add_argument("--pushover", default=str(HERE / "pushover.json"), help="Pushover keys file (see pushover.example.json)")
     ap.add_argument("--still-alive", default=str(HERE / "still_alive.json"), help="still-alive ping config (see still_alive.example.json)")
     ap.add_argument("--aisstream", default=str(HERE / "aisstream.json"), help="aisstream.io key for internet AIS (see aisstream.example.json)")
+    ap.add_argument("--nfl", default=str(HERE / "nfl.json"), help="noforeignland.com boat tracking keys (see nfl.example.json)")
     ap.add_argument("--tide-cache", default=str(HERE / "tide_cache.json"), help="local copy of the tide forecast (works offline)")
     a = ap.parse_args()
     check_bind(a.bind)
@@ -1336,6 +1460,11 @@ def main():
     log.info("Push alerts: %s", "Pushover ready" if watch.notifier.configured else f"off ({Path(a.pushover).name} missing or invalid)")
     watch.alive = StillAlive(a.still_alive, lambda: watch.settings["alive_minutes"], on_event=lambda text, kind: watch.event(text, kind=kind))
     log.info("Still-alive check: %s", "ready" if watch.alive.configured else f"off ({Path(a.still_alive).name} missing or invalid)")
+    def track_copy():
+        with watch.lock: return [list(p) for p in watch.track]
+    watch.nfl = NoForeignLand(a.nfl, track_copy, lambda: watch.settings["nfl_tracking"], sent=watch.nfl_sent,
+                              on_event=lambda text, kind: watch.event(text, kind=kind))
+    log.info("noforeignland.com tracking: %s", "ready" if watch.nfl.configured else f"off ({Path(a.nfl).name} missing or invalid)")
     def boat_center():
         pos = watch.boat.get("pos") or watch.anchor
         return (pos["lat"], pos["lon"]) if pos else None

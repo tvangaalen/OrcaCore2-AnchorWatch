@@ -34,8 +34,10 @@ Overview: `README.md`. Release history: `CHANGELOG.md`.
 - AIS from the Core's own receiver always has priority over internet AIS (`read_ais`): never let an internet report
   replace a current local one, and keep My MMSI filtered in both. The Orca app's internet AIS is Orca-cloud only
   (`europe-west1-the-orca.cloudfunctions.net`); do not try to reproduce that private API.
-- Test servers (`.claude/launch.json`) point `--pushover`, `--still-alive` and `--aisstream` at non-existent files so a
-  test can never send a real alert, ping or subscription.
+- Test servers (`.claude/launch.json`) point `--pushover`, `--still-alive`, `--aisstream` and `--nfl` at non-existent
+  files so a test can never send a real alert, ping, subscription or position.
+- noforeignland.com uploads go out only from the `NoForeignLand` worker thread and only take points from the watch's
+  track (never a frozen position). Never reuse NFL's Signal K plugin key: NFL issues an integration key per app.
 - Times are always shown 24-hour (`clock()` / `dayTime()` in the page); never use locale time defaults (AM/PM).
 - Map tiles are fetched on demand only (OpenStreetMap tile policy): no bulk or prefetch downloads.
 - The app has no sea charts (the user had them removed in 1.12.0; Seamarks stay). Only add a map source whose
@@ -43,7 +45,7 @@ Overview: `README.md`. Release history: `CHANGELOG.md`.
   or commit CM93 / C-MAP or other proprietary chart data.
 - Never colour-invert charts in dark mode (depth-area and light colours carry meaning); dim them instead. Night
   mode may invert, because everything is tinted red there anyway.
-- Never commit `pushover.json` (Pushover keys), `still_alive.json` (ping URL, API key), `aisstream.json` (aisstream.io key), `tide_cache.json` (boat area), `certs/`, `anchor_state.json`, `tile_cache/`, `captures/` or `recordings/` (all in `.gitignore`).
+- Never commit `pushover.json` (Pushover keys), `still_alive.json` (ping URL, API key), `aisstream.json` (aisstream.io key), `nfl.json` (noforeignland.com keys), `tide_cache.json` (boat area), `certs/`, `anchor_state.json`, `tile_cache/`, `captures/` or `recordings/` (all in `.gitignore`).
   They hold keys, the boat's positions and network captures. Keep real MMSIs and anchorage positions out of tests.
 
 ## Verifying changes

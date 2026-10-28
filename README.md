@@ -160,6 +160,15 @@ when the API key is in place), otherwise it alerts after the interval.
   Setup: on aisstream.io *Sign in with GitHub*, create a key under *API Keys*, copy `aisstream.example.json` to
   `aisstream.json` (git-ignored) with the key, and press **Reconnect** under Alarm settings. Only the key and a box
   of about 6 x 8 km around the boat are sent; the box follows the boat.
+- **Position to noforeignland.com** (optional, Settings > Other settings): sends the boat's track to
+  [noforeignland.com](https://www.noforeignland.com) Boat tracking, through the same API as NFL's own Signal K plugin.
+  Points come from the watch's own track (so a frozen GPS never gets in), one per 80 m moved and at least 60 s apart,
+  uploaded every 10 min. While the internet is down they wait, as long as the track keeps them (*Track kept*), and go
+  up together later. At anchor nothing moves, so once a day the current position is sent to keep the boat active.
+  What was sent last is kept in `anchor_state.json`, so nothing is sent twice.
+  Setup: two keys in `nfl.json` (git-ignored; see `nfl.example.json`): `boat_api_key` from noforeignland.com
+  (*Account > Settings > Boat tracking > API Key*) and `api_key`, an integration key NFL issues per app (ask
+  support@noforeignland.com; the Signal K plugin's built-in key must not be reused). Then press **Send now**.
 - **GPS sources** (Settings): a list of every GPS ever seen (kept in `anchor_state.json`), in the order they are
   tried, with ▲ / ▼ to change that order (saved straight away) and *Default order* (`4 → 127 → 3 → 254`: B&G iGPS,
   ZG100, Onwa AIS GPS, Orca Core). Each line shows its status: **IN USE** (green), *Active, standby*, *Active, on
