@@ -4,6 +4,23 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.15 — Better Orca Core hold detection
+
+### 1.15.0
+- **The Orca Core's GPS hold is detected on its own fix.** The recordings of 2026-10-26 to 28 show that after each
+  10 m release the Core's own fix holds again at once, while its normal position flickers for minutes between a few
+  values 0.1 m apart. That flicker was taken for a live GPS (logged as *hold end*, a new *hold start* a minute later),
+  so 254 was shown live while it could be up to 10 m behind. A 254 whose own fix is held, with the position within
+  2 m of it, is now on hold; a live receiver is then preferred over it, as before.
+- `recordings/core_gps_log.jsonl`: a hold that resumes within 2 min of a release is the same hold, logged as
+  *hold release* with the jump; *hold end* says how many releases there were. Every line lists the other GPS
+  receivers that are active, to test whether the hold only happens with other GPS on the bus (the Core alone stayed
+  live for hours on 2026-10-28 while flagged stationary).
+- **B&G ZG100: 100 s before it counts as frozen** (was 60 s). At rest it sends a new position only every ~40 s
+  and sometimes misses one; it was marked frozen and recorded 17 times in one night.
+- New `--recordings` option; the test servers now write their GPS diagnostics to a scratch folder instead of the
+  real `recordings/` (the 2026-10-28 18:52 and 19:53 lines in the log came from a test server).
+
 ## 1.14 — noforeignland.com tracking
 
 ### 1.14.1

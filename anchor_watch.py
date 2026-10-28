@@ -20,7 +20,12 @@ frozen. The Core's own GPS is the exception: it has a static hold. Recordings of
 is about 10 m away (every release jumped 10.0-10.1 m). While its receiver is alive (the fix time keeps advancing)
 such a held 254 position is used, marked "hold": it is never more than about HOLD_M off. A live receiver is
 preferred over a held 254, whatever the order, so with the instruments on the track stays smooth. While a source is held, its GPS values are written to recordings/ (local only, never committed) for analysis.
-What starts the hold is not known yet (a power cycle of the Core clears it). To find out, the Core's route state
+Since the recordings of 2026-10-28 the hold is detected on the Core's own fix: after each release navigation.gnss
+holds again at once, while navigation.position flickers for minutes between a few values 0.1 m apart (HOLD_NEAR_M).
+That flicker is still the hold, and a release that resumes within HOLD_MERGE_S belongs to the same hold.
+What starts the hold is not known yet (a power cycle of the Core clears it). The Core alone on the bus (instruments
+off) showed no hold for hours on 2026-10-16 and 2026-10-28 while flagged stationary, so every line in the log lists
+the other GPS receivers that are active. To find out, the Core's route state
 (waypoints, arrival circle entered, waypoint crossed) is logged, and every start and end of a hold goes to
 recordings/core_gps_log.jsonl together with that route state and the stationary flag. Every change of the Core's
 stationary flag goes there too, with speed and hold state: does the hold start when the boat comes to rest? (After
@@ -46,7 +51,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.14.1"
+VERSION = "1.15.0"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -55,6 +60,10 @@ FROZEN_S = 60           # a position that has not changed at all for this long i
 DIAG_S = 600            # how long the GPS values of a held source are recorded
 HOLD_M = 10             # the Core's GPS (254) holds its fix until the boat is this far away (measured, see module doc)
 HOLD_LOG_S = 3600       # "on hold" is logged at most once per this period (the hold comes and goes every few minutes)
+HOLD_NEAR_M = 2         # 254's position flickering within this of its held own fix is still the hold (see module doc)
+HOLD_MERGE_S = 120      # a 254 hold that resumes within this after a release is the same hold (logged as a release)
+# receivers that are slow by design get more time before they count as frozen (matched on the model name)
+SLOW_GPS = {"ZG100": 100}  # B&G ZG100: a new position every ~40 s at rest, gaps up to 81 s (recordings 2026-10-27/28)
 # the Core's route state, logged on every change (is arriving at a waypoint what starts the 254 hold?)
 ROUTE_KEYS = {"navigation.data.254.originWaypoint": "from waypoint", "navigation.data.254.destinationWaypoint": "to waypoint",
               "navigation.data.254.entered": "arrival circle entered", "navigation.data.254.crossed": "waypoint crossed",
@@ -870,7 +879,10 @@ class AnchorWatch:
         self.dt_seen = {}                  # source -> (fix time, time it last changed): is the receiver still alive?
         self.hold_logged = None; self.hold_was = set()
         self.route_seen = None             # last route state of the Core (ROUTE_KEYS label -> value)
-        self.hold_since = None             # start of the current 254 hold
+        self.hold_since = None             # start of the current 254 hold (releases included)
+        self.hold_left = None              # 254 left its hold here; the hold ends when it is not back within HOLD_MERGE_S
+        self.hold_fix = None               # 254's held own fix, to measure the jump at a release
+        self.hold_releases = 0             # releases (jumps of about HOLD_M) during the current hold
         self.stationary_seen = None        # last value of the Core's stationary flag
         self.lock = threading.RLock()
         self.settings = dict(DEFAULTS)
@@ -944,15 +956,17 @@ class AnchorWatch:
                 for src, c in d.items():
                     seen = self.pos_seen.get((kind, src))
                     if not seen or (seen[0], seen[1]) != (c["lat"], c["lon"]): self.pos_seen[(kind, src)] = (c["lat"], c["lon"], now)
-                held[kind] = {src for src, c in d.items() if c["age"] <= FRESH_S and now - self.pos_seen[(kind, src)][2] >= FROZEN_S}
+                held[kind] = {src for src, c in d.items() if c["age"] <= FRESH_S and now - self.pos_seen[(kind, src)][2] >= self.frozen_after(src)}
             # navigation.position held: use the receiver's own fix while that still changes; frozen only when both are held
             raw = {src for src in held["position"] if src in gsrcs and gsrcs[src]["age"] <= FRESH_S and src not in held["gnss"]}
             for src in gsrcs:
                 dt = sensors.get(f"navigation.gnss.{src}.datetime"); dt = dt[0] if dt else None
                 if dt is not None and (src not in self.dt_seen or self.dt_seen[src][0] != dt): self.dt_seen[src] = (dt, now)
-            # the Core's GPS on static hold: both positions held, but the receiver keeps producing fixes
-            hold = {src for src in held["position"] - raw if src == CORE_SOURCE and src in gsrcs and gsrcs[src]["age"] <= FRESH_S
-                    and src in self.dt_seen and now - self.dt_seen[src][1] <= FRESH_S}
+            # the Core's GPS on static hold: its own fix held while the receiver keeps producing fixes; navigation.position
+            # is held too, or flickers within HOLD_NEAR_M of that fix
+            hold = {src for src in held["gnss"] if src == CORE_SOURCE and src in srcs and srcs[src]["age"] <= FRESH_S
+                    and src in self.dt_seen and now - self.dt_seen[src][1] <= FRESH_S
+                    and (src in held["position"] or dist_bearing_m(srcs[src]["lat"], srcs[src]["lon"], gsrcs[src]["lat"], gsrcs[src]["lon"])[0] <= HOLD_NEAR_M)}
             frozen = held["position"] - raw - hold
             route = self.route_state(sensors)
             if route != self.route_seen:
@@ -969,18 +983,28 @@ class AnchorWatch:
                               sog_kn=round(sog[0] * 1.943844, 2) if sog and sog[0] is not None else None, on_hold=CORE_SOURCE in self.hold)
                 self.stationary_seen = st
             if CORE_SOURCE in hold and CORE_SOURCE not in self.hold:
-                self.hold_since = now; self.core_log(now, "hold start", sensors, route)
-            elif CORE_SOURCE in self.hold and CORE_SOURCE not in hold and self.hold_since is not None:
-                self.core_log(now, "hold end", sensors, route, held_s=round(now - self.hold_since)); self.hold_since = None
+                fix = (gsrcs[CORE_SOURCE]["lat"], gsrcs[CORE_SOURCE]["lon"])
+                if self.hold_since is not None and self.hold_left is not None:        # back within HOLD_MERGE_S: a release
+                    self.hold_releases += 1
+                    self.core_log(now, "hold release", sensors, route, jump_m=round(dist_bearing_m(*self.hold_fix, *fix)[0], 1),
+                                  away_s=round(now - self.hold_left))
+                else:
+                    self.hold_since, self.hold_releases = now, 0; self.core_log(now, "hold start", sensors, route)
+                self.hold_left, self.hold_fix = None, fix
+            elif CORE_SOURCE in self.hold and CORE_SOURCE not in hold: self.hold_left = now
+            if self.hold_left is not None and now - self.hold_left > HOLD_MERGE_S:
+                if self.hold_since is not None:
+                    self.core_log(now, "hold end", sensors, route, held_s=round(self.hold_left - self.hold_since), releases=self.hold_releases)
+                self.hold_since = self.hold_left = None
             if hold - self.hold and (self.hold_logged is None or now - self.hold_logged >= HOLD_LOG_S):
                 self.hold_logged = now
                 self.event(f"GPS {self.source_name(CORE_SOURCE)} on hold: the Core keeps its fix while the boat lies still and moves it "
                            f"on after about {HOLD_M} m. Still used; position within about {HOLD_M} m", now)
                 if self.diag_dir and CORE_SOURCE not in self.diag: self.start_diag(CORE_SOURCE, now)
             for src in raw - self.raw - self.frozen:
-                self.event(f"GPS {self.source_name(src)}: position unchanged for {FROZEN_S} s, its own GNSS fix still changes: using that", now)
+                self.event(f"GPS {self.source_name(src)}: position unchanged for {self.frozen_after(src)} s, its own GNSS fix still changes: using that", now)
             for src in frozen - self.frozen:
-                self.event(f"GPS {self.source_name(src)} has not moved at all for {FROZEN_S} s"
+                self.event(f"GPS {self.source_name(src)} has not moved at all for {self.frozen_after(src)} s"
                            + (" (position and own GNSS fix)" if src in gsrcs else "") + ": treated as frozen, not used", now, "warn")
             for src in (self.frozen | self.raw) - frozen - raw:
                 if src in srcs: self.event(f"GPS {self.source_name(src)} is updating again", now, "ok")
@@ -1100,12 +1124,19 @@ class AnchorWatch:
         """The Core's route state (ROUTE_KEYS label -> value), {} without route data."""
         return {label: sensors[k][0] for k, label in ROUTE_KEYS.items() if k in sensors}
 
+    def frozen_after(self, src):
+        """Seconds without any change before a source counts as frozen: FROZEN_S, longer only for SLOW_GPS models."""
+        name = self.source_name(src)
+        return next((secs for model, secs in SLOW_GPS.items() if model in name), FROZEN_S)
+
     def core_log(self, now, what, sensors, route, **extra):
-        """One line in recordings/core_gps_log.jsonl: a 254 hold starting or ending, or a route change."""
+        """One line in recordings/core_gps_log.jsonl: a 254 hold starting, releasing or ending, a change of the
+        stationary flag or of the route, with the other GPS receivers that are active (does the hold need them?)."""
         if not self.diag_dir: return
         st = sensors.get(f"navigation.motion.{CORE_SOURCE}.stationary")
+        others = sorted((src for src, c in position_sources(sensors, now).items() if src != CORE_SOURCE and c["age"] <= FRESH_S), key=int)
         row = {"t": round(now, 1), "time": datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M:%S"), "what": what,
-               "stationary": st[0] if st else None, "route": route, **extra}
+               "stationary": st[0] if st else None, "route": route, "other_gps": others, **extra}
         try:
             self.diag_dir.mkdir(exist_ok=True)
             with open(self.diag_dir / "core_gps_log.jsonl", "a", encoding="utf-8") as fh: fh.write(json.dumps(row) + "\n")
@@ -1466,13 +1497,14 @@ def main():
     ap.add_argument("--still-alive", default=str(HERE / "still_alive.json"), help="still-alive ping config (see still_alive.example.json)")
     ap.add_argument("--aisstream", default=str(HERE / "aisstream.json"), help="aisstream.io key for internet AIS (see aisstream.example.json)")
     ap.add_argument("--nfl", default=str(HERE / "nfl.json"), help="noforeignland.com boat tracking keys (see nfl.example.json)")
+    ap.add_argument("--recordings", default=str(HERE / "recordings"), help="folder for the GPS diagnostics (held GPS, Core GPS log)")
     ap.add_argument("--tide-cache", default=str(HERE / "tide_cache.json"), help="local copy of the tide forecast (works offline)")
     a = ap.parse_args()
     check_bind(a.bind)
     if bool(a.certfile) != bool(a.keyfile): ap.error("--certfile and --keyfile go together")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 
-    store = Store(); watch = AnchorWatch(store, a.state, diag_dir=HERE / "recordings")
+    store = Store(); watch = AnchorWatch(store, a.state, diag_dir=a.recordings)
     page_url = f"{'https' if a.certfile else 'http'}://{a.bind}:{a.port}/"
     watch.notifier = Pushover(a.pushover, page_url, on_event=lambda text, kind: watch.event(text, kind=kind))
     log.info("Push alerts: %s", "Pushover ready" if watch.notifier.configured else f"off ({Path(a.pushover).name} missing or invalid)")

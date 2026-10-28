@@ -15,7 +15,10 @@ Overview: `README.md`. Release history: `CHANGELOG.md`.
   power-saving setup). A held `navigation.position` may fall back to the same source's own `navigation.gnss` fix only
   while that fix itself keeps changing; never use a position whose values are unchanged for FROZEN_S. Only exception:
   source 254's measured static hold (releases after HOLD_M = 10 m), used only while its fix time keeps advancing;
-  never extend that exception to other receivers or drop the fix-time check. Tests must give
+  never extend that exception to other receivers or drop the fix-time check. The hold is detected on 254's own fix
+  (`navigation.gnss`) with the position within `HOLD_NEAR_M` of it (it flickers after a release); never widen that
+  to positions that really move. Slow-by-design receivers may get a longer limit in `SLOW_GPS` (B&G ZG100: 100 s,
+  approved by the user 2026-10-28); keep it per model and only as long as the recordings show. Tests must give
   simulated receivers jitter, or they count as frozen.
 - **Parse Core messages with `orca_reader.parse_message`**, never plain `json.loads`: the Core sends unescaped text.
 - The alarm logic runs on the server (`AnchorWatch.tick`); the page only displays and sends commands. Do not move
@@ -35,7 +38,8 @@ Overview: `README.md`. Release history: `CHANGELOG.md`.
   replace a current local one, and keep My MMSI filtered in both. The Orca app's internet AIS is Orca-cloud only
   (`europe-west1-the-orca.cloudfunctions.net`); do not try to reproduce that private API.
 - Test servers (`.claude/launch.json`) point `--pushover`, `--still-alive`, `--aisstream` and `--nfl` at non-existent
-  files so a test can never send a real alert, ping, subscription or position.
+  files so a test can never send a real alert, ping, subscription or position, and `--recordings` at a scratch folder
+  so tests never write into the real GPS diagnostics.
 - noforeignland.com uploads go out only from the `NoForeignLand` worker thread and only take points from the watch's
   track (never a frozen position). NFL issues an integration key per app (requested 2026-10-28). Until it arrives the
   user chose to use the Signal K plugin's shared key, in the local `nfl.json` only: never put that key in code, tests

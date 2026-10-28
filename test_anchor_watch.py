@@ -152,6 +152,62 @@ class AnchorWatchTest(unittest.TestCase):
         if clock: kv["navigation__gnss__254__datetime"] = f"T{int(self.s.t)}"
         self.s.put(**kv)
 
+    def core_live(self, lat, lon):
+        # Core's GPS moving normally: position and own fix change, fix time advances
+        lat += (int(self.s.t) % 3) * 1e-7
+        self.s.put(navigation__position__254__latitude=lat, navigation__position__254__longitude=lon,
+                   navigation__gnss__254__latitude=lat, navigation__gnss__254__longitude=lon, navigation__gnss__254__method=2,
+                   navigation__gnss__254__datetime=f"T{int(self.s.t)}", navigation__motion__254__stationary=0)
+
+    def core_flicker(self, fix, away_m=0.0):
+        # recordings 2026-10-28: own fix held, navigation.position flips every few seconds between values 0.1 m apart
+        pos = offset(*fix, 0, away_m + (0.1 if (int(self.s.t) // 3) % 2 else 0))
+        self.s.put(navigation__position__254__latitude=pos[0], navigation__position__254__longitude=pos[1],
+                   navigation__gnss__254__latitude=fix[0], navigation__gnss__254__longitude=fix[1], navigation__gnss__254__method=2,
+                   navigation__gnss__254__datetime=f"T{int(self.s.t)}", navigation__motion__254__stationary=1)
+
+    def test_flickering_position_with_held_own_fix_is_the_hold(self):
+        self.w.command({"action": "settings", "settings": {"gps_sources": "254,4,127,3"}})
+        self.s.t += 11
+        for _ in range(70): self.core_flicker((LAT, LON)); self.w.tick(self.s.t); self.s.t += 1
+        self.assertEqual(self.w.hold, {"254"}); self.assertEqual(self.w.frozen, set())
+        self.assertEqual(self.w.boat["pos"]["source"], "254"); self.assertTrue(self.w.boat["pos"]["hold"])
+
+    def test_position_far_from_held_own_fix_is_not_the_hold(self):
+        self.w.command({"action": "settings", "settings": {"gps_sources": "254,4,127,3"}})
+        self.s.t += 11
+        for _ in range(70): self.core_flicker((LAT, LON), away_m=5); self.w.tick(self.s.t); self.s.t += 1
+        self.assertEqual(self.w.hold, set()); self.assertFalse(self.w.boat["pos"]["hold"])
+
+    def test_releases_belong_to_one_hold_and_the_log_lists_other_gps(self):
+        d = tempfile.TemporaryDirectory()
+        try:
+            self.w.diag_dir = Path(d.name); self.s.t += 11
+            fix2 = offset(LAT, LON, 0, 10)
+            for _ in range(70): self.core_flicker((LAT, LON)); self.s.boat(LAT, LON, src="127", frozen=False); self.w.tick(self.s.t); self.s.t += 1
+            for _ in range(70): self.core_flicker(fix2); self.s.boat(LAT, LON, src="127", frozen=False); self.w.tick(self.s.t); self.s.t += 1
+            for i in range(125): self.core_live(*offset(LAT, LON, 0, 20 + i * 0.5)); self.w.tick(self.s.t); self.s.t += 1
+            rows = [json.loads(x) for x in (Path(d.name) / "core_gps_log.jsonl").read_text(encoding="utf-8").splitlines()]
+            holds = [r for r in rows if r["what"].startswith("hold")]
+            self.assertEqual([r["what"] for r in holds], ["hold start", "hold release", "hold end"])
+            self.assertEqual(holds[0]["other_gps"], ["127"]); self.assertEqual(holds[2]["other_gps"], [])
+            self.assertAlmostEqual(holds[1]["jump_m"], 10, delta=0.2); self.assertGreaterEqual(holds[1]["away_s"], 60)
+            self.assertEqual(holds[2]["releases"], 1); self.assertAlmostEqual(holds[2]["held_s"], 80, delta=2)   # held from 60 s to 140 s
+        finally: d.cleanup()
+
+    def test_slow_zg100_gets_more_time_before_frozen(self):
+        self.s.store.addr_to_name["127"] = "zg"; self.s.store.name_info["zg"] = {"manufacturer": "B & G", "modelID": "ZG100 Antenna"}
+        self.w.command({"action": "settings", "settings": {"gps_sources": "127,254"}})
+        self.s.t += 11
+        for _ in range(85):                                 # ZG100 with one gap of 85 s between new positions: still used
+            self.s.put(navigation__position__127__latitude=LAT, navigation__position__127__longitude=LON, navigation__gnss__127__method=1)
+            self.w.tick(self.s.t); self.s.t += 1
+        self.assertEqual(self.w.boat["pos"]["source"], "127"); self.assertNotIn("127", self.w.frozen)
+        for _ in range(20):                                 # over 100 s unchanged: frozen after all
+            self.s.put(navigation__position__127__latitude=LAT, navigation__position__127__longitude=LON, navigation__gnss__127__method=1)
+            self.w.tick(self.s.t); self.s.t += 1
+        self.assertIn("127", self.w.frozen); self.assertEqual(self.w.frozen_after("4"), 60)
+
     def test_core_static_hold_is_used_and_a_drag_still_shows(self):
         self.w.command({"action": "settings", "settings": {"gps_sources": "254,4,127,3"}})
         self.s.t += 11
@@ -216,9 +272,10 @@ class AnchorWatchTest(unittest.TestCase):
             texts = [e["text"] for e in self.w.events]
             self.assertIn("Orca Core route: from waypoint 1, to waypoint 2, arrival circle entered 0, waypoint crossed 0", texts)
             self.assertIn("Orca Core route: arrival circle entered 0 → 1", texts)
-            for _ in range(3): self.core_static_hold(*offset(LAT, LON, 0, 20)); self.w.tick(self.s.t); self.s.t += 1   # released
+            for i in range(125): self.core_live(*offset(LAT, LON, 0, 20 + i * 0.5)); self.w.tick(self.s.t); self.s.t += 1   # under way
             rows = [json.loads(x) for x in (Path(d.name) / "core_gps_log.jsonl").read_text(encoding="utf-8").splitlines()]
-            self.assertEqual([r["what"] for r in rows], ["route", "route", "hold start", "hold end"])
+            self.assertEqual([r["what"] for r in rows if not r["what"].startswith("stationary")], ["route", "route", "hold start", "hold end"])
+            rows = [r for r in rows if not r["what"].startswith("stationary")]
             self.assertEqual(rows[2]["route"]["arrival circle entered"], 1); self.assertEqual(rows[2]["stationary"], 1)
             self.assertGreater(rows[3]["held_s"], 0)
             self.assertEqual(len(list(Path(d.name).glob("gps_held_254_*.jsonl"))), 1)          # values recorded during the hold

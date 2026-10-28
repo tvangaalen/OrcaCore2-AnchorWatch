@@ -180,21 +180,26 @@ when the API key is in place), otherwise it alerts after the interval.
 - **Frozen-position check:** the Core's position is not always live while it flags the boat as stationary (on
   2026-10-12, with the other receivers on, it stayed at one exact value for minutes; on 2026-10-16, Core alone, it
   kept moving). A frozen position would hide a slow drag, so any GPS whose position has not changed at all for 60 s
-  is skipped and logged; real receivers always jitter in the last digit. Each source sends two positions: the normal
+  is skipped and logged; real receivers always jitter in the last digit. The B&G ZG100 gets 100 s: at rest it sends
+  a new position only every ~40 s (gaps up to 81 s seen on 2026-10-28). Each source sends two positions: the normal
   one and the receiver's own GNSS fix (`navigation.gnss`). If the normal one is held but the own fix still changes,
   the own fix is used (shown as *own GNSS fix* in the GPS list); only when both are held is the source frozen.
   The Core's own GPS (254) is the exception: it has a **static hold**. Recordings of 2026-10-26 show it keeps one fix
   while the boat lies still (46 min seen) and moves it on as soon as the boat is about 10 m away (every release
   jumped 10.0-10.1 m). While its receiver keeps producing fixes, a held 254 position stays in use, shown as
   *GPS hold* in the Position tile: it is within about 10 m, so a drag shows at the latest about 10 m later.
+  The hold is detected on the Core's own fix: after each release it holds again at once, while the normal position
+  flickers for minutes between a few values 0.1 m apart; that flicker (within 2 m of the held fix) is still the hold.
   A live receiver is preferred over a held 254, so with the instruments on the track stays smooth. With no
   usable GPS left, the GPS alarm goes off. While a source is held, its GPS values are recorded for 10 min to
   `recordings/gps_held_*.jsonl` (local only, git-ignored), to find out why it held. What starts the 254 hold is
   not known yet (a power cycle of the Core clears it). The Core's route state (from/to waypoint, arrival circle
-  entered, waypoint crossed) is logged on every change, and each hold start and end goes to
+  entered, waypoint crossed) is logged on every change, and each hold start, release (with the jump) and end goes to
   `recordings/core_gps_log.jsonl` with that route state, and so does every change of the Core's stationary flag
-  (with speed). The route is ruled out by now (2026-10-27: holds with and without a route, never an arrival flag);
-  the open question is whether the hold starts when the Core's motion detector switches to stationary.
+  (with speed). A release that is back on hold within 2 min belongs to the same hold. Every line lists the other GPS
+  receivers that are active. The route is ruled out (2026-10-27), and so is the stationary flag on its own: on
+  2026-10-28 the Core, alone on the bus, stayed live for hours while flagged stationary. Open question: does the hold
+  only happen while other GPS receivers are on the bus?
 - With the instruments off there is no depth or wind; the tiles then say that the depth or wind alarm is inactive.
 - Anchor, settings, track and log are kept in `anchor_state.json`, so a restart resumes the watch.
 
