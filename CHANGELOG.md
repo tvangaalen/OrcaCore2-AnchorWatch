@@ -6,6 +6,12 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ## 1.14 — noforeignland.com tracking
 
+### 1.14.1
+- **Track to noforeignland.com when the anchor drops** (new setting, on by default): dropping the anchor sends the
+  track since the last upload straight away, ending at the anchorage itself, even when the boat crept in less than 80 m.
+  It also works with *Position to noforeignland.com* (the 10-minute upload) switched off. If the internet is down it
+  retries every 5 min. **Send now** works in that mode too.
+
 ### 1.14.0
 - **Position to noforeignland.com** (Settings > Other settings): the boat's track goes to noforeignland.com Boat
   tracking automatically, like NFL's Signal K plugin does: a point per 80 m moved (at least 60 s apart), uploaded

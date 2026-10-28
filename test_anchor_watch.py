@@ -691,13 +691,43 @@ class NoForeignLandTest(unittest.TestCase):
         self.assertIn("support@noforeignland.com", n.reload()); self.on = True; self.step(n, 1300); self.assertEqual(self.posts, [])
         self.f.unlink(); self.assertIn("not found", n.reload())
 
+    def test_anchor_drop_sends_straight_away_up_to_the_anchorage(self):
+        n = self.make(); self.sail(1000, 12); self.step(n, 1060)          # regular upload: next one due at 1660
+        self.sail(1065, 6, step_m=5)                                      # creeping in: 30 m, under MIN_MOVE_M
+        n.dropped(); self.step(n, 1100)
+        self.assertEqual(len(self.posts), 2)
+        track = json.loads(self.body(self.posts[1])["track"])
+        self.assertEqual(track[-1], [int(self.track[-1][0] * 1000), self.track[-1][1], self.track[-1][2]])
+        self.assertFalse(n.anchor_drop); self.assertIn("Track sent", self.events[-1][1])
+        self.step(n, 1110); self.assertEqual(len(self.posts), 2)          # once only
+
+    def test_anchor_drop_works_with_tracking_off_and_retries(self):
+        n = self.make(); self.on = False; self.sail(1000, 120)
+        self.step(n, 1600); self.assertEqual(self.posts, [])
+        self.fail = urllib.error.URLError("no internet"); n.dropped(); self.step(n, 1600)
+        self.assertTrue(n.anchor_drop); self.assertIsNone(n.sent)
+        self.sail(1600, 61, step_m=0.1)                                   # lying at anchor, GPS still live
+        self.fail = None; self.step(n, 1900)                               # retried after RETRY_S
+        self.assertEqual(len(self.posts), 2); self.assertFalse(n.anchor_drop)
+        self.assertEqual(n.sent["t"], self.track[-1][0])
+
+    def test_drop_command_follows_the_setting(self):
+        s = Sim(); w = s.watch
+        try:
+            w.nfl = n = self.make(); w.boat["pos"] = {"lat": LAT, "lon": LON, "source": "4"}; w.boat["heading"] = 0
+            w.command({"action": "drop"}); self.assertTrue(n.anchor_drop)
+            n.anchor_drop = False; w.command({"action": "raise"})
+            w.command({"action": "settings", "settings": {"nfl_on_anchor": False}})
+            w.command({"action": "drop"}); self.assertFalse(n.anchor_drop)
+        finally: s.dir.cleanup()
+
     def test_last_sent_point_survives_a_restart(self):
         s = Sim(); w = s.watch
         try:
             w.nfl = n = self.make(); n.sent = {"t": 1000.0, "lat": LAT, "lon": LON}
             w.save(); w2 = AnchorWatch(s.store, s.file)
             self.assertEqual(w2.nfl_sent, n.sent)
-            w.command({"action": "settings", "settings": {"nfl_tracking": False}})
+            w.command({"action": "settings", "settings": {"nfl_tracking": False, "nfl_on_anchor": False}})
             with self.assertRaises(ValueError): w.command({"action": "nfl_send"})
             self.assertEqual(w.state()["nfl"]["sent_t"], 1000.0)
         finally: s.dir.cleanup()

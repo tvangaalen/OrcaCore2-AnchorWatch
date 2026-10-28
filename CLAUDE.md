@@ -37,7 +37,9 @@ Overview: `README.md`. Release history: `CHANGELOG.md`.
 - Test servers (`.claude/launch.json`) point `--pushover`, `--still-alive`, `--aisstream` and `--nfl` at non-existent
   files so a test can never send a real alert, ping, subscription or position.
 - noforeignland.com uploads go out only from the `NoForeignLand` worker thread and only take points from the watch's
-  track (never a frozen position). Never reuse NFL's Signal K plugin key: NFL issues an integration key per app.
+  track (never a frozen position). NFL issues an integration key per app (requested 2026-10-28). Until it arrives the
+  user chose to use the Signal K plugin's shared key, in the local `nfl.json` only: never put that key in code, tests
+  or docs, and replace it in `nfl.json` as soon as NFL's own key arrives.
 - Times are always shown 24-hour (`clock()` / `dayTime()` in the page); never use locale time defaults (AM/PM).
 - Map tiles are fetched on demand only (OpenStreetMap tile policy): no bulk or prefetch downloads.
 - The app has no sea charts (the user had them removed in 1.12.0; Seamarks stay). Only add a map source whose

@@ -360,6 +360,7 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
             <label class="check"><input type="checkbox" data-s="nfl_tracking"> Position to noforeignland.com</label>
             <button class="small" id="nflSend">Send now</button>
           </div>
+          <div class="row" style="margin-top:6px"><label class="check"><input type="checkbox" data-s="nfl_on_anchor"> Send the track to noforeignland.com when the anchor drops</label></div>
           <div class="note" id="nflStatus" style="margin-top:4px"></div>
         <div class="row">
           <label class="f">Track kept (h)<input type="number" data-s="track_hours" min="1" max="72"></label>
@@ -521,9 +522,10 @@ function render(){
      +' Ships from the own AIS receiver always take priority; internet ships are drawn hollow.';
   const nf=S.nfl||{}, nfst=$('nflStatus');
   nfst.innerHTML=!nf.configured?'Not set up: put your Boat API key and the NFL integration key in <b>nfl.json</b> on the watch PC (see nfl.example.json), then press <b>Send now</b>.'
-    :!S.settings.nfl_tracking?'Off.'
+    :!S.settings.nfl_tracking&&!S.settings.nfl_on_anchor?'Off.'
     :(nf.last_error?`<span style="color:var(--bad)">Last upload failed: ${esc(nf.last_error)}</span> `:'')
-     +'Every 10 min while under way (a point per 80 m), once a day at anchor.'
+     +(S.settings.nfl_tracking?'Every 10 min while under way (a point per 80 m), once a day at anchor'+(S.settings.nfl_on_anchor?', and straight away when the anchor drops.':'.')
+       :'Only when the anchor drops (the track since the last upload).')
      +(nf.sent_t?` Last position sent: ${dayTime(nf.sent_t)}${nf.last_ok?` (${nf.last_count} point${nf.last_count===1?'':'s'} at ${clock(nf.last_ok)})`:''}.`:'');
   $('footer').textContent=`Anchor Watch ${S.version||''} · not for navigation`;
   drawMap();

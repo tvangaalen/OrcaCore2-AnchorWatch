@@ -46,7 +46,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.14.0"
+VERSION = "1.14.1"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -80,6 +80,7 @@ DEFAULTS = {
     "alive_minutes": 60.0,    # still-alive check: alert from outside after this long without a sign of life, 0 = off
     "internet_ais": True,     # add AIS targets from aisstream.io (needs aisstream.json); the local receiver always wins
     "nfl_tracking": True,     # send the track to noforeignland.com (needs nfl.json)
+    "nfl_on_anchor": True,    # send the track to noforeignland.com as soon as the anchor drops (also with nfl_tracking off)
     "track_hours": 24,
     "bow_height": 1.2,        # m from the waterline to the bow roller, for the chain advice
     "chain_formula": "5*(D+B)",  # recommended chain; D = max depth next 24 h, B = bow height, LOA (see ChainFormula)
@@ -750,6 +751,9 @@ class NoForeignLand:
     one track every UPLOAD_EVERY_S; while the internet is down they wait (as long as the track keeps them, track_hours)
     and go up together later. At anchor nothing moves, so once per KEEPALIVE_S the current position is sent anyway to
     keep the boat active on the website. What was sent last is kept in the state file, so a restart sends nothing twice.
+    When the anchor drops (setting nfl_on_anchor) the waiting track goes up straight away, ending at the boat's current
+    position even when it is closer than MIN_MOVE_M to the last point, so the anchorage shows on the website. This also
+    works with the continuous upload (nfl_tracking) switched off.
     """
     URL = "https://www.noforeignland.com/home/api/v1/boat/tracking/track"
     MIN_MOVE_M = 80
@@ -765,6 +769,7 @@ class NoForeignLand:
         self.cfg = None; self.sent = sent          # {"t", "lat", "lon"}: last point NFL accepted
         self.last_ok = self.last_error = None; self.last_count = 0
         self.next_try = 0.0; self.failing = False
+        self.anchor_drop = False           # anchor just dropped: send now, up to the current position (until it got through)
         self.wake = threading.Event()
         self.reload()
         if start: threading.Thread(target=self._worker, daemon=True).start()
@@ -787,6 +792,10 @@ class NoForeignLand:
         """Send what is waiting straight away."""
         self.next_try = 0.0; self.wake.set()
 
+    def dropped(self):
+        """The anchor is down: send the track up to here straight away."""
+        self.anchor_drop = True; self.poke()
+
     def pending(self, now):
         """The points not sent yet, thinned to MIN_MOVE_M / MIN_GAP_S; the keepalive point when nothing moved for a day."""
         pts = self.points(); ref = self.sent; out = []
@@ -794,7 +803,10 @@ class NoForeignLand:
             if ref is not None and (t - ref["t"] < self.MIN_GAP_S or dist_bearing_m(ref["lat"], ref["lon"], lat, lon)[0] < self.MIN_MOVE_M):
                 continue
             ref = {"t": t, "lat": lat, "lon": lon}; out.append([t, lat, lon])
-        if not out and pts and now - pts[-1][0] <= self.FRESH_S and (self.sent is None or now - self.sent["t"] >= self.KEEPALIVE_S):
+        fresh = pts and now - pts[-1][0] <= self.FRESH_S
+        if self.anchor_drop and fresh and (not out or out[-1][0] != pts[-1][0]) and (self.sent is None or pts[-1][0] > self.sent["t"]):
+            out.append(list(pts[-1]))       # the anchorage itself, however close to the last point
+        elif not out and fresh and (self.sent is None or now - self.sent["t"] >= self.KEEPALIVE_S):
             out.append(list(pts[-1]))
         return out
 
@@ -818,9 +830,9 @@ class NoForeignLand:
     def step(self, now=None):
         """One round of the worker: upload the waiting points when due. Tests call it directly."""
         now = now or time.time()
-        if not self.configured or not self.enabled() or now < self.next_try: return
+        if not self.configured or now < self.next_try or not (self.enabled() or self.anchor_drop): return
         track = self.pending(now)
-        if not track: return
+        if not track: self.anchor_drop = False; return
         self.next_try = now + self.UPLOAD_EVERY_S
         try: self._post(track)
         except Exception as e:
@@ -830,6 +842,9 @@ class NoForeignLand:
             return
         t, lat, lon = track[-1]; self.sent = {"t": t, "lat": lat, "lon": lon}
         self.last_ok, self.last_error, self.last_count = now, None, len(track)
+        if self.anchor_drop:
+            self.anchor_drop = False
+            self.on_event(f"Track sent to noforeignland.com ({len(track)} point{'s' if len(track) != 1 else ''})", "info")
         if self.failing: self.failing = False; self.on_event("noforeignland.com uploads get through again", "ok")
 
     def _worker(self):
@@ -1138,6 +1153,7 @@ class AnchorWatch:
                 self.max_dist = dist_bearing_m(lat, lon, pos["lat"], pos["lon"])[0]
                 self._push_cancel(); self.alarms.clear(); self.pending.clear()
                 self.event(f"Anchor down at {lat:.6f}, {lon:.6f}" + (f", {ahead:.0f} m ahead of the GPS" if ahead else "") + f", radius {radius:.0f} m", now)
+                if self.nfl is not None and self.nfl.configured and s["nfl_on_anchor"]: self.nfl.dropped()
             elif act == "move":
                 if not self.anchor: raise ValueError("Anchor is not set")
                 self.anchor["lat"], self.anchor["lon"] = _num(c, "lat", -90, 90), _num(c, "lon", -180, 180)
@@ -1203,8 +1219,10 @@ class AnchorWatch:
                 if self.nfl is None: raise ValueError("noforeignland.com tracking is not available")
                 err = self.nfl.reload()
                 if err: raise ValueError(f"noforeignland.com tracking is not set up: {err}")
-                if not s["nfl_tracking"]: raise ValueError("noforeignland.com tracking is off")
-                self.nfl.poke(); self.event("noforeignland.com upload requested", now)
+                if not s["nfl_tracking"] and not s["nfl_on_anchor"]: raise ValueError("noforeignland.com tracking is off")
+                if s["nfl_tracking"]: self.nfl.poke()
+                else: self.nfl.dropped()            # only-at-anchor mode: send the track up to here
+                self.event("noforeignland.com upload requested", now)
             elif act == "clear_track":
                 self.track.clear(); self.track_gen += 1; self.max_dist = 0.0; self.event("New track started (old track and max swing deleted)", now)
             else: raise ValueError(f"Unknown action {act!r}")

@@ -166,6 +166,8 @@ when the API key is in place), otherwise it alerts after the interval.
   uploaded every 10 min. While the internet is down they wait, as long as the track keeps them (*Track kept*), and go
   up together later. At anchor nothing moves, so once a day the current position is sent to keep the boat active.
   What was sent last is kept in `anchor_state.json`, so nothing is sent twice.
+  **Send the track to noforeignland.com when the anchor drops** (on by default): dropping the anchor uploads the track
+  since the last upload straight away, ending at the anchorage. It also works with the 10-minute upload switched off.
   Setup: two keys in `nfl.json` (git-ignored; see `nfl.example.json`): `boat_api_key` from noforeignland.com
   (*Account > Settings > Boat tracking > API Key*) and `api_key`, an integration key NFL issues per app (ask
   support@noforeignland.com; the Signal K plugin's built-in key must not be reused). Then press **Send now**.
