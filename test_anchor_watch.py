@@ -217,6 +217,23 @@ class AnchorWatchTest(unittest.TestCase):
             self.w.tick(self.s.t); self.s.t += 1
             self.assertEqual(self.w.boat["pos"]["source"], "254"); self.assertFalse(self.w.boat["pos"]["hold"])
 
+    def test_core_restart_is_logged(self):
+        d = tempfile.TemporaryDirectory()
+        try:
+            self.w.diag_dir = Path(d.name); t = 1_800_000_000.0
+            self.w.core_info({"uptime": 5000, "version_fw": "2026.34.1"}, t)
+            self.w.core_info({"uptime": 5060.4, "version_fw": "2026.34.1"}, t + 60)       # same boot: nothing new
+            self.w.core_info({"uptime": 30, "version_fw": "2026.34.1"}, t + 400)          # restarted
+            self.w.core_info({"uptime": "?"}, t + 460)                                     # junk is ignored
+            rows = [json.loads(x) for x in (Path(d.name) / "core_gps_log.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([r["what"] for r in rows], ["core running", "core restart"])
+            self.assertEqual(rows[0]["core_up_s"], 5000); self.assertEqual(rows[1]["core_up_s"], 30)
+            self.assertFalse(rows[1]["hold_before"]); self.assertEqual(rows[1]["firmware"], "2026.34.1")
+            self.assertTrue(any(e["text"].startswith("Orca Core restarted at") for e in self.w.events))
+            self.w.save(); w2 = AnchorWatch(self.s.store, self.w.state_file)              # the boot time survives a restart
+            self.assertAlmostEqual(w2.core_boot, t + 370, delta=1)
+        finally: d.cleanup()
+
     def test_slow_zg100_gets_more_time_before_frozen(self):
         self.s.store.addr_to_name["127"] = "zg"; self.s.store.name_info["zg"] = {"manufacturer": "B & G", "modelID": "ZG100 Antenna"}
         self.w.command({"action": "settings", "settings": {"gps_sources": "127,254"}})

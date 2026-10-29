@@ -26,6 +26,10 @@ That flicker is still the hold, and a release that resumes within HOLD_MERGE_S b
 Confirming a hold takes FROZEN_S, and on 2026-10-29 the anchor was dropped in that first minute after a release,
 from a 254 fix that was 10 m behind. So a 254 whose own fix has not changed for HOLD_SOON_S (a live 254 changes it
 every 1-5 s) already goes behind the live receivers; it is only logged as a hold once confirmed.
+A power cycle of the Core clears the hold, and the "Core alone, no hold" observation of 2026-10-28 turned out to
+follow a Core restart (uptime: booted 14:20). So the Core's boot time is read from its /info page (GET only) and
+every restart goes to the log; every log line carries the Core's uptime. Does the hold stay away after a restart
+until the boat has sailed and stopped again?
 What starts the hold is not known yet (a power cycle of the Core clears it). The Core alone on the bus (instruments
 off) showed no hold for hours on 2026-10-16 and 2026-10-28 while flagged stationary, so every line in the log lists
 the other GPS receivers that are active. To find out, the Core's route state
@@ -54,7 +58,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.15.1"
+VERSION = "1.15.2"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -66,6 +70,8 @@ HOLD_LOG_S = 3600       # "on hold" is logged at most once per this period (the 
 HOLD_NEAR_M = 2         # 254's position flickering within this of its held own fix is still the hold (see module doc)
 HOLD_MERGE_S = 120      # a 254 hold that resumes within this after a release is the same hold (logged as a release)
 HOLD_SOON_S = 10        # 254's own fix unchanged this long: probably on hold, a live receiver goes first (see module doc)
+CORE_INFO_S = 60        # the Core's uptime is read this often (GET :8080/info): a restart is logged
+BOOT_JITTER_S = 120     # boot times this close are the same boot (uptime and clock are read a moment apart)
 # receivers that are slow by design get more time before they count as frozen (matched on the model name)
 SLOW_GPS = {"ZG100": 100}  # B&G ZG100: a new position every ~40 s at rest, gaps up to 81 s (recordings 2026-10-27/28)
 # the Core's route state, logged on every change (is arriving at a waypoint what starts the 254 hold?)
@@ -889,6 +895,8 @@ class AnchorWatch:
         self.hold_fix = None               # 254's held own fix, to measure the jump at a release
         self.hold_releases = 0             # releases (jumps of about HOLD_M) during the current hold
         self.stationary_seen = None        # last value of the Core's stationary flag
+        self.core_boot = None              # when the Core last started (from its uptime; kept in the state file)
+        self.core_fw = None                # the Core's firmware version
         self.lock = threading.RLock()
         self.settings = dict(DEFAULTS)
         self.anchor = None                 # {"lat", "lon", "radius", "set_at"}
@@ -932,13 +940,14 @@ class AnchorWatch:
         self.track = deque(d.get("track", [])); self.events.extend(d.get("events", [])); self.last_depth = d.get("last_depth")
         self.gps_seen = {str(k): v for k, v in (d.get("gps_seen") or {}).items() if isinstance(v, dict)}
         self.nfl_sent = d.get("nfl_sent") if isinstance(d.get("nfl_sent"), dict) else None
+        if isinstance(d.get("core_boot"), (int, float)): self.core_boot = d["core_boot"]
         if self.anchor: log.info("anchor watch restored: %.6f, %.6f radius %.0f m", self.anchor["lat"], self.anchor["lon"], self.anchor["radius"])
 
     def save(self):
         with self.lock:
             d = {"settings": self.settings, "anchor": self.anchor, "max_dist": self.max_dist,
                  "track": list(self.track), "events": list(self.events), "last_depth": self.last_depth, "gps_seen": self.gps_seen,
-                 "nfl_sent": self.nfl.sent if self.nfl is not None else self.nfl_sent}
+                 "nfl_sent": self.nfl.sent if self.nfl is not None else self.nfl_sent, "core_boot": self.core_boot}
             self.dirty = False
         tmp = self.state_file.with_suffix(".tmp")
         tmp.write_text(json.dumps(d, separators=(",", ":")), encoding="utf-8"); os.replace(tmp, self.state_file)
@@ -1146,11 +1155,36 @@ class AnchorWatch:
         st = sensors.get(f"navigation.motion.{CORE_SOURCE}.stationary")
         others = sorted((src for src, c in position_sources(sensors, now).items() if src != CORE_SOURCE and c["age"] <= FRESH_S), key=int)
         row = {"t": round(now, 1), "time": datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M:%S"), "what": what,
-               "stationary": st[0] if st else None, "route": route, "other_gps": others, **extra}
+               "stationary": st[0] if st else None, "route": route, "other_gps": others,
+               "core_up_s": round(now - self.core_boot) if self.core_boot else None, **extra}
         try:
             self.diag_dir.mkdir(exist_ok=True)
             with open(self.diag_dir / "core_gps_log.jsonl", "a", encoding="utf-8") as fh: fh.write(json.dumps(row) + "\n")
         except OSError as e: log.warning("GPS diagnostics: %s", e)
+
+    def core_info(self, info, now=None):
+        """The Core's /info page (read every CORE_INFO_S): a new boot time means the Core restarted; logged with the
+        hold state, so the log shows whether a restart keeps the 254 hold away."""
+        now = now or time.time()
+        up = info.get("uptime")
+        if not isinstance(up, (int, float)) or up < 0: return
+        boot, fw = now - up, info.get("version_fw")
+        with self.lock:
+            with self.store.lock: sensors = dict(self.store.values["sensors"])
+            known = self.core_boot
+            if known is not None and abs(boot - known) <= BOOT_JITTER_S:
+                if fw != self.core_fw and self.core_fw is not None: self.event(f"Orca Core firmware {self.core_fw} → {fw}", now)
+                self.core_fw = fw
+                return
+            self.core_boot, self.core_fw = boot, fw; self.dirty = True
+            when = datetime.fromtimestamp(boot).strftime("%Y-%m-%d %H:%M:%S")
+            if known is None:
+                self.core_log(now, "core running", sensors, self.route_state(sensors), booted=when, firmware=fw)
+            else:
+                self.core_log(now, "core restart", sensors, self.route_state(sensors), booted=when, firmware=fw,
+                              previous_boot=datetime.fromtimestamp(known).strftime("%Y-%m-%d %H:%M:%S"),
+                              hold_before=self.hold_since is not None)
+                self.event(f"Orca Core restarted at {datetime.fromtimestamp(boot).strftime('%H:%M')}", now)
 
     def gps_rows(self, now):
         """Every GPS source ever seen, in the order they are tried (gps_sources first, then the others as read_boat
@@ -1356,6 +1390,16 @@ def _num(c, key, lo, hi):
 # ---------------------------------------------------------------- loops and web server
 
 
+async def core_info_loop(watch, host):
+    """Read the Core's uptime (GET only) so its restarts show up in the GPS log."""
+    while True:
+        try:
+            info = await asyncio.to_thread(lambda: json.load(urllib.request.urlopen(f"http://{host}:8080/info", timeout=10)))
+            watch.core_info(info)
+        except Exception as e: log.debug("core info: %s", e)
+        await asyncio.sleep(CORE_INFO_S)
+
+
 async def watch_loop(watch):
     last_save = time.time()
     while True:
@@ -1544,7 +1588,7 @@ def main():
 
     async def run():
         tasks = [stream_loop(store, "sensors", f"ws://{a.host}:8089" + SENSORS_PATH.format(ms=1000), None), watch_loop(watch),
-                 devices_loop(store, a.host), watch.netais.run(), watch.tide.run()]
+                 devices_loop(store, a.host), core_info_loop(watch, a.host), watch.netais.run(), watch.tide.run()]
         if not a.no_ais: tasks.append(stream_loop(store, "ais", f"ws://{a.host}:8089" + AIS_PATH, None))
         await asyncio.gather(*tasks)
     try: asyncio.run(run())

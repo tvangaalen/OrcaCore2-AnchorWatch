@@ -192,6 +192,8 @@ when the API key is in place), otherwise it alerts after the interval.
   flickers for minutes between a few values 0.1 m apart; that flicker (within 2 m of the held fix) is still the hold.
   Confirming a hold takes 60 s, so once the Core's own fix has not changed for 10 s a live receiver already goes
   first (a live Core GPS changes its fix every 1-5 s): an anchor dropped right after a release is not set 10 m off.
+  A power cycle of the Core clears the hold, so the Core's uptime is read from `http://<core>:8080/info` (GET only)
+  once a minute; every restart is logged (*core restart*) and every log line has `core_up_s`.
   A live receiver is preferred over a held 254, so with the instruments on the track stays smooth. With no
   usable GPS left, the GPS alarm goes off. While a source is held, its GPS values are recorded for 10 min to
   `recordings/gps_held_*.jsonl` (local only, git-ignored), to find out why it held. What starts the 254 hold is

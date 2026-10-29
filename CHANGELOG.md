@@ -6,6 +6,13 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ## 1.15 — Better Orca Core hold detection
 
+### 1.15.2
+- **Orca Core restarts go to the GPS log.** The Core's uptime is read once a minute from its own info page (read
+  only), and every restart is logged in `recordings/core_gps_log.jsonl` (*core restart*, with the boot time and
+  whether a hold was on) and shown as an event. Every log line now has the Core's uptime (`core_up_s`). The
+  "Core alone, no hold" hours of 2026-10-28 turned out to follow a Core restart at 14:20; this shows whether a
+  restart keeps the hold away until the boat has sailed and stopped again.
+
 ### 1.15.1
 - **A live GPS goes first as soon as the Core's fix stops changing.** Confirming a hold takes 60 s, and in that
   minute (at the start of a hold and after every release) the Core's GPS still counted as live. On 2026-10-29 the
