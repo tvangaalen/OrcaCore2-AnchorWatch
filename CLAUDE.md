@@ -17,7 +17,8 @@ Overview: `README.md`. Release history: `CHANGELOG.md`.
   source 254's measured static hold (releases after HOLD_M = 10 m), used only while its fix time keeps advancing;
   never extend that exception to other receivers or drop the fix-time check. The hold is detected on 254's own fix
   (`navigation.gnss`) with the position within `HOLD_NEAR_M` of it (it flickers after a release); never widen that
-  to positions that really move. Slow-by-design receivers may get a longer limit in `SLOW_GPS` (B&G ZG100: 100 s,
+  to positions that really move. `HOLD_SOON_S` (10 s unchanged own fix) only puts 254 behind live receivers; it must
+  never keep 254 out of the frozen check or log a hold before it is confirmed. Slow-by-design receivers may get a longer limit in `SLOW_GPS` (B&G ZG100: 100 s,
   approved by the user 2026-10-28); keep it per model and only as long as the recordings show. Tests must give
   simulated receivers jitter, or they count as frozen.
 - **Parse Core messages with `orca_reader.parse_message`**, never plain `json.loads`: the Core sends unescaped text.

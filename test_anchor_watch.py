@@ -7,7 +7,7 @@ import asyncio, io, json, math, os, time, urllib.error, urllib.parse
 from datetime import datetime, timezone
 from unittest import mock
 
-from anchor_watch import AnchorWatch, InternetAIS, NoForeignLand, Pushover, StillAlive, TileCache, read_ais, dist_bearing_m, offset
+from anchor_watch import AnchorWatch, InternetAIS, NoForeignLand, Pushover, StillAlive, TileCache, read_ais, dist_bearing_m, offset, HOLD_SOON_S
 from orca_reader import Store
 
 LAT, LON = 39.0, 1.5        # an arbitrary point at sea; the tests only use positions relative to it
@@ -194,6 +194,28 @@ class AnchorWatchTest(unittest.TestCase):
             self.assertAlmostEqual(holds[1]["jump_m"], 10, delta=0.2); self.assertGreaterEqual(holds[1]["away_s"], 60)
             self.assertEqual(holds[2]["releases"], 1); self.assertAlmostEqual(holds[2]["held_s"], 80, delta=2)   # held from 60 s to 140 s
         finally: d.cleanup()
+
+    def test_anchor_dropped_just_after_a_release_uses_a_live_receiver(self):
+        # 2026-10-29: the anchor went down in the first minute after a release, from a 254 fix 10 m behind
+        self.w.command({"action": "settings", "settings": {"gps_sources": "254,127,4,3", "bow_offset": 0}})
+        self.s.t += 11
+        real = offset(LAT, LON, 0, 19)
+        for _ in range(70): self.core_flicker((LAT, LON)); self.s.boat(*offset(LAT, LON, 0, 8), src="127", frozen=False); self.w.tick(self.s.t); self.s.t += 1
+        fix2 = offset(LAT, LON, 0, 10)                      # released: 10 m on, then held again at once
+        for _ in range(HOLD_SOON_S + 2): self.core_flicker(fix2); self.s.boat(*real, src="127", frozen=False); self.w.tick(self.s.t); self.s.t += 1
+        self.assertNotIn("254", self.w.hold)                # not confirmed yet ...
+        self.assertEqual(self.w.boat["pos"]["source"], "127")   # ... but the live receiver already goes first
+        self.w.command({"action": "drop"})
+        self.assertLess(dist_bearing_m(self.w.anchor["lat"], self.w.anchor["lon"], *real)[0], 0.1)
+
+    def test_live_core_gps_stays_first(self):
+        # a live 254 changes its own fix every 1-5 s: it must not count as probably on hold
+        self.w.command({"action": "settings", "settings": {"gps_sources": "254,127"}})
+        self.s.t += 11
+        for i in range(120):
+            self.core_live(*offset(LAT, LON, 0, (i // 5) * 0.3)); self.s.boat(LAT, LON, src="127", frozen=False)
+            self.w.tick(self.s.t); self.s.t += 1
+            self.assertEqual(self.w.boat["pos"]["source"], "254"); self.assertFalse(self.w.boat["pos"]["hold"])
 
     def test_slow_zg100_gets_more_time_before_frozen(self):
         self.s.store.addr_to_name["127"] = "zg"; self.s.store.name_info["zg"] = {"manufacturer": "B & G", "modelID": "ZG100 Antenna"}

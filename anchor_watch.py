@@ -23,6 +23,9 @@ preferred over a held 254, whatever the order, so with the instruments on the tr
 Since the recordings of 2026-10-28 the hold is detected on the Core's own fix: after each release navigation.gnss
 holds again at once, while navigation.position flickers for minutes between a few values 0.1 m apart (HOLD_NEAR_M).
 That flicker is still the hold, and a release that resumes within HOLD_MERGE_S belongs to the same hold.
+Confirming a hold takes FROZEN_S, and on 2026-10-29 the anchor was dropped in that first minute after a release,
+from a 254 fix that was 10 m behind. So a 254 whose own fix has not changed for HOLD_SOON_S (a live 254 changes it
+every 1-5 s) already goes behind the live receivers; it is only logged as a hold once confirmed.
 What starts the hold is not known yet (a power cycle of the Core clears it). The Core alone on the bus (instruments
 off) showed no hold for hours on 2026-10-16 and 2026-10-28 while flagged stationary, so every line in the log lists
 the other GPS receivers that are active. To find out, the Core's route state
@@ -51,7 +54,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.15.0"
+VERSION = "1.15.1"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -62,6 +65,7 @@ HOLD_M = 10             # the Core's GPS (254) holds its fix until the boat is t
 HOLD_LOG_S = 3600       # "on hold" is logged at most once per this period (the hold comes and goes every few minutes)
 HOLD_NEAR_M = 2         # 254's position flickering within this of its held own fix is still the hold (see module doc)
 HOLD_MERGE_S = 120      # a 254 hold that resumes within this after a release is the same hold (logged as a release)
+HOLD_SOON_S = 10        # 254's own fix unchanged this long: probably on hold, a live receiver goes first (see module doc)
 # receivers that are slow by design get more time before they count as frozen (matched on the model name)
 SLOW_GPS = {"ZG100": 100}  # B&G ZG100: a new position every ~40 s at rest, gaps up to 81 s (recordings 2026-10-27/28)
 # the Core's route state, logged on every change (is arriving at a waypoint what starts the 254 hold?)
@@ -877,6 +881,7 @@ class AnchorWatch:
         self.raw = set()                   # sources whose navigation.position is held, own fix used instead
         self.hold = set()                  # the Core's GPS on static hold: still used (within HOLD_M)
         self.dt_seen = {}                  # source -> (fix time, time it last changed): is the receiver still alive?
+        self.hold_soon = set()             # 254 probably on hold (own fix unchanged HOLD_SOON_S): live receivers first
         self.hold_logged = None; self.hold_was = set()
         self.route_seen = None             # last route state of the Core (ROUTE_KEYS label -> value)
         self.hold_since = None             # start of the current 254 hold (releases included)
@@ -968,6 +973,11 @@ class AnchorWatch:
                     and src in self.dt_seen and now - self.dt_seen[src][1] <= FRESH_S
                     and (src in held["position"] or dist_bearing_m(srcs[src]["lat"], srcs[src]["lon"], gsrcs[src]["lat"], gsrcs[src]["lon"])[0] <= HOLD_NEAR_M)}
             frozen = held["position"] - raw - hold
+            # not confirmed yet, but a live receiver goes first: the hold holds again at once after a release
+            soon = hold | {src for src in gsrcs if src == CORE_SOURCE and src in srcs and srcs[src]["age"] <= FRESH_S
+                           and src not in frozen and now - self.pos_seen[("gnss", src)][2] >= HOLD_SOON_S
+                           and src in self.dt_seen and now - self.dt_seen[src][1] <= FRESH_S
+                           and dist_bearing_m(srcs[src]["lat"], srcs[src]["lon"], gsrcs[src]["lat"], gsrcs[src]["lon"])[0] <= HOLD_NEAR_M}
             route = self.route_state(sensors)
             if route != self.route_seen:
                 if route and self.route_seen:
@@ -1011,15 +1021,15 @@ class AnchorWatch:
             if self.diag_dir:
                 for src in (frozen | raw) - set(self.diag): self.start_diag(src, now)
                 self.record_diag(sensors, now)
-            self.hold_was = self.hold
-            self.frozen, self.raw, self.hold = frozen, raw, hold
-            boat = read_boat(sensors, now, prefs, frozen, float(s["transducer_depth"]), raw, hold); self.boat = boat; pos = boat["pos"]
-            if pos: pos["hold"] = pos["source"] in hold
+            self.hold_was = self.hold_soon
+            self.frozen, self.raw, self.hold, self.hold_soon = frozen, raw, hold, soon
+            boat = read_boat(sensors, now, prefs, frozen, float(s["transducer_depth"]), raw, soon); self.boat = boat; pos = boat["pos"]
+            if pos: pos["hold"] = pos["source"] in soon
             if boat["depth"] is not None:
                 if not self.last_depth or now - self.last_depth["t"] >= 60: self.dirty = True       # persisted about once a minute
                 self.last_depth = {"d": boat["depth"], "t": now, "lat": pos["lat"] if pos else None, "lon": pos["lon"] if pos else None}
             self.gps_list = [{"source": src, "name": self.source_name(src), "sats": c["sats"], "hdop": c["hdop"],
-                              "age": round(c["age"], 1), "frozen": src in frozen, "raw": src in raw, "hold": src in hold, "in_use": bool(pos and pos["source"] == src)}
+                              "age": round(c["age"], 1), "frozen": src in frozen, "raw": src in raw, "hold": src in soon, "in_use": bool(pos and pos["source"] == src)}
                              for src, c in sorted(srcs.items(), key=lambda kv: (kv[0] != CORE_SOURCE, int(kv[0])))]
             for src, c in srcs.items():
                 if c["age"] > FRESH_S: continue
@@ -1033,7 +1043,7 @@ class AnchorWatch:
                 self.last_pos_t = now
                 if pos["source"] != self.last_source:
                     # switches caused by the 254 hold come and go every few minutes: the hold message covers them
-                    if self.last_source is not None and CORE_SOURCE not in hold and not (pos["source"] == CORE_SOURCE and CORE_SOURCE in self.hold_was):
+                    if self.last_source is not None and CORE_SOURCE not in soon and not (pos["source"] == CORE_SOURCE and CORE_SOURCE in self.hold_was):
                         self.event(f"Position source now {self.source_name(pos['source'])}", now, "warn")
                     self.last_source = pos["source"]
                 if not self.track or now - self.track[-1][0] >= TRACK_EVERY_S:

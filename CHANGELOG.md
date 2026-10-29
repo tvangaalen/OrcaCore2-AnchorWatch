@@ -6,6 +6,14 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ## 1.15 — Better Orca Core hold detection
 
+### 1.15.1
+- **A live GPS goes first as soon as the Core's fix stops changing.** Confirming a hold takes 60 s, and in that
+  minute (at the start of a hold and after every release) the Core's GPS still counted as live. On 2026-10-29 the
+  anchor was dropped in that minute, from a Core fix that was 10 m behind (it jumped 10 m seven seconds later).
+  A Core GPS whose own fix has not changed for 10 s now already goes behind the live receivers; a live Core GPS
+  changes its fix every 1-5 s. It is logged as a hold only once confirmed, as before. Replaying the recording of
+  2026-10-29, the anchor would have been set from the ZG100.
+
 ### 1.15.0
 - **The Orca Core's GPS hold is detected on its own fix.** The recordings of 2026-10-26 to 28 show that after each
   10 m release the Core's own fix holds again at once, while its normal position flickers for minutes between a few
