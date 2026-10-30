@@ -38,6 +38,11 @@ recordings/core_gps_log.jsonl together with that route state and the stationary 
 stationary flag goes there too, with speed and hold state: does the hold start when the boat comes to rest? (After
 2026-10-27 the route is ruled out: holds came and went with and without a route, never with an arrival flag set.)
 
+A phone or tablet can be a GPS too (NetGPS): an app such as GPS2IP pushes NMEA 0183 (RMC, GGA) over the LAN to
+port NET_GPS_PORT, UDP or TCP. Each sender becomes a source from NET_SRC_BASE on and gets the same frozen check as
+any receiver. Because a phone can go ashore in the dinghy, a network GPS more than NET_AWAY_M from every other active
+GPS is skipped ("away"); with no other GPS active it is used as it is.
+
 State (anchor, settings, track, events) is kept in anchor_state.json so a restart does not lose the watch.
 
 Map tiles (OpenStreetMap, OpenSeaMap seamarks, Esri satellite) are
@@ -58,7 +63,7 @@ from orca_reader import AIS_PATH, CORE_SOURCE, KN, RAD, SENSORS_PATH, Store, dev
 try: import winsound
 except ImportError: winsound = None
 
-VERSION = "1.15.2"
+VERSION = "1.16.1"
 HERE = Path(__file__).resolve().parent
 log = logging.getLogger("anchor")
 EARTH = 6371008.8
@@ -72,6 +77,10 @@ HOLD_MERGE_S = 120      # a 254 hold that resumes within this after a release is
 HOLD_SOON_S = 10        # 254's own fix unchanged this long: probably on hold, a live receiver goes first (see module doc)
 CORE_INFO_S = 60        # the Core's uptime is read this often (GET :8080/info): a restart is logged
 BOOT_JITTER_S = 120     # boot times this close are the same boot (uptime and clock are read a moment apart)
+NET_SRC_BASE = 300      # network GPS senders (NMEA over the LAN, e.g. GPS2IP) are numbered from here (NMEA 2000 ends at 254)
+NET_MAX_AGE_S = 30      # a network GPS sentence whose own GPS time is further off than this is not used (stored, re-sent)
+NET_GPS_PORT = 10110    # the usual NMEA 0183 over IP port (default of the nmea_port setting)
+NET_AWAY_M = 100        # a network GPS this far from every other active GPS is not used: the phone has left the boat?
 # receivers that are slow by design get more time before they count as frozen (matched on the model name)
 SLOW_GPS = {"ZG100": 100}  # B&G ZG100: a new position every ~40 s at rest, gaps up to 81 s (recordings 2026-10-27/28)
 # the Core's route state, logged on every change (is arriving at a waypoint what starts the 254 hold?)
@@ -108,11 +117,12 @@ DEFAULTS = {
     "pos_format": "dmm",      # position tile: "dmm" degrees + decimal minutes, "dms" degrees/minutes/seconds, "dd" decimal
     "draught": 0.0,           # m, keel below the waterline; 0 = off. Shows the clearance under the keel
     "transducer_depth": 0.0,  # m, transducer below the waterline, used when the sounder does not report it
+    "nmea_port": NET_GPS_PORT,  # network GPS (NMEA over UDP and TCP, e.g. GPS2IP) listens on this port
 }
 SETTING_LIMITS = {"default_radius": (5, 2000), "confirm_s": (0, 600), "gps_timeout_s": (5, 600), "core_timeout_s": (5, 600),
                   "min_depth": (0, 500), "max_wind_kn": (0, 150), "bow_offset": (-50, 50), "track_hours": (1, 72),
                   "alive_minutes": (0, 1440), "bow_height": (0, 10), "loa": (0, 100), "min_ais_dist": (0, 2000),
-                  "draught": (0, 10), "transducer_depth": (0, 5)}
+                  "draught": (0, 10), "transducer_depth": (0, 5), "nmea_port": (1024, 65535)}
 
 # ---------------------------------------------------------------- geometry (flat earth is fine for < a few km)
 
@@ -873,6 +883,152 @@ class NoForeignLand:
             self.wake.wait(timeout=30); self.wake.clear()
 
 
+class NetGPS:
+    """GPS positions sent as NMEA 0183 over the LAN, e.g. by GPS2IP on an iPhone or iPad (UDP or TCP push to this PC).
+    Every sender (by IP address, private addresses only) becomes a position source numbered from NET_SRC_BASE, so it
+    takes part in the normal source order, failover and frozen check. RMC and GGA are read (checksum required); a
+    sentence whose own GPS time is more than NET_MAX_AGE_S off this PC's clock is dropped: GPS2IP re-sends up to 600
+    stored messages after a reconnect, and those are old positions."""
+
+    def __init__(self, store, sources=None, on_event=None, on_new=None):
+        self.store, self.on_event, self.on_new = store, on_event, on_new
+        self.lock = threading.Lock()
+        self.sources = dict(sources or {})          # sender IP -> source number (kept in the state file)
+        self.clock_warned = 0
+        self.port, self.error = None, None          # the port listened on now, or why it could not be opened
+
+    def ip_of(self, src):
+        with self.lock: return next((ip for ip, s in self.sources.items() if s == str(src)), None)
+
+    def is_net(self, src):
+        with self.lock: return str(src) in self.sources.values()
+
+    def forget(self, src):
+        with self.lock: self.sources = {ip: s for ip, s in self.sources.items() if s != str(src)}
+
+    def source_for(self, ip):
+        with self.lock:
+            src = self.sources.get(ip)
+            if src: return src, False
+            used = {int(s) for s in self.sources.values()}
+            src = str(next(n for n in range(NET_SRC_BASE, NET_SRC_BASE + 1000) if n not in used)); self.sources[ip] = src
+            return src, True
+
+    @staticmethod
+    def parse(line):
+        """One NMEA sentence -> {"type", "lat", "lon", "valid", "hms", "date", "sats", "hdop"}, or None."""
+        line = line.strip()
+        if not line.startswith("$") or "*" not in line: return None
+        body, _, ck = line[1:].partition("*")
+        x = 0
+        for ch in body: x ^= ord(ch)
+        try:
+            if int(ck[:2], 16) != x: return None
+        except ValueError: return None
+        f = body.split(",")
+        kind = f[0][-3:]
+        def coord(v, hemi, deg_digits):
+            if not v or hemi not in "NSEW" or not hemi: return None
+            d = float(v[:deg_digits]) + float(v[deg_digits:]) / 60
+            return -d if hemi in "SW" else d
+        try:
+            if kind == "RMC" and len(f) >= 10:
+                return {"type": kind, "hms": f[1], "valid": f[2] == "A", "lat": coord(f[3], f[4], 2), "lon": coord(f[5], f[6], 3),
+                        "date": f[9], "sats": None, "hdop": None}
+            if kind == "GGA" and len(f) >= 9:
+                return {"type": kind, "hms": f[1], "valid": f[6] not in ("", "0"), "lat": coord(f[2], f[3], 2), "lon": coord(f[4], f[5], 3),
+                        "date": None, "sats": int(f[7]) if f[7] else None, "hdop": float(f[8]) if f[8] else None}
+        except ValueError: return None
+        return None
+
+    @staticmethod
+    def fix_time(hms, date, now):
+        """The sentence's own UTC time as a Unix time (GGA has no date: the day nearest to now is taken)."""
+        if len(hms) < 6: return None
+        try:
+            h, m, sec = int(hms[:2]), int(hms[2:4]), float(hms[4:])
+            if date and len(date) == 6:
+                yy, year = int(date[4:6]), datetime.fromtimestamp(now, timezone.utc).year   # two-digit year: the century nearest to now
+                d = datetime(min((year // 100 * 100 + yy + c for c in (-100, 0, 100)), key=lambda y: abs(y - year)),
+                             int(date[2:4]), int(date[:2]), tzinfo=timezone.utc)
+                return d.timestamp() + h * 3600 + m * 60 + sec
+            day = datetime.fromtimestamp(now, timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+            t = day + h * 3600 + m * 60 + sec
+            return min((t - 86400, t, t + 86400), key=lambda c: abs(c - now))
+        except ValueError: return None
+
+    def feed(self, ip, data, now=None):
+        """Sentences from one sender (a datagram or a line). Returns how many were used."""
+        now = now or time.time()
+        try:
+            if not ipaddress.ip_address(ip).is_private: return 0
+        except ValueError: return 0
+        if isinstance(data, bytes): data = data.decode("ascii", "replace")
+        used = 0
+        for line in data.splitlines():
+            p = self.parse(line)
+            if not p: continue
+            t = self.fix_time(p["hms"], p["date"], now)
+            if t is None: continue
+            if abs(now - t) > NET_MAX_AGE_S:
+                if p["type"] == "RMC" and p["valid"] and abs(now - t) < 3600 and now - self.clock_warned > 3600 and self.on_event:
+                    # an hour or less off and repeating: more likely this PC's clock than stored messages
+                    self.clock_warned = now
+                    self.on_event(f"Network GPS {ip}: its GPS time is {abs(now - t):.0f} s off this PC's clock; positions that old are not used", "warn")
+                continue
+            src, new = self.source_for(ip)
+            if new and self.on_new: self.on_new(ip, src)
+            vals = {f"navigation.gnss.{src}.method": 1 if p["valid"] else 0}
+            if p["lat"] is not None and p["lon"] is not None:
+                vals[f"navigation.position.{src}.latitude"] = p["lat"]; vals[f"navigation.position.{src}.longitude"] = p["lon"]
+            if p["sats"] is not None: vals[f"navigation.gnss.{src}.satellites"] = p["sats"]
+            if p["hdop"] is not None: vals[f"navigation.gnss.{src}.HDOP"] = p["hdop"]
+            with self.store.lock:
+                for k, v in vals.items(): self.store.values["sensors"][k] = (v, now)
+            used += 1
+        return used
+
+    async def run(self, bind, port_now):
+        """Listen for UDP datagrams and TCP connections on the same port (GPS2IP 'UDP Push' or 'TCP Push'). The port
+        comes from port_now() (the nmea_port setting): when it changes, the listener moves; when it cannot be opened
+        (in use by another program), it is retried every 30 s."""
+        while True:
+            port = port_now(); udp = tcp = None
+            try:
+                udp, tcp = await self.listen(bind, port); self.port, self.error = port, None
+                log.info("Network GPS (NMEA 0183): listening on %s:%d, UDP and TCP", bind, port)
+            except OSError as e:
+                if udp: udp.close()
+                udp = None; self.port, self.error = None, f"port {port} could not be opened: {e.strerror or e}"
+                log.warning("Network GPS: %s", self.error)
+                if self.on_event: self.on_event(f"Network GPS: {self.error}", "warn")
+            waited = 0
+            while port_now() == port and (udp or waited < 30): await asyncio.sleep(1); waited += 1
+            if udp: udp.close()
+            if tcp: tcp.close(); await tcp.wait_closed()
+            self.port = None
+
+    async def listen(self, bind, port):
+        loop = asyncio.get_running_loop(); feed = self.feed
+
+        class Udp(asyncio.DatagramProtocol):
+            def datagram_received(self, data, addr): feed(addr[0], data)
+
+        async def tcp(reader, writer):
+            ip = writer.get_extra_info("peername")[0]
+            try:
+                while line := await reader.readline():
+                    if len(line) > 1000: break
+                    feed(ip, line)
+            except (ConnectionError, OSError, ValueError): pass        # ValueError: a line over the limit
+            finally: writer.close()
+
+        udp, _ = await loop.create_datagram_endpoint(Udp, local_addr=(bind, port))
+        try: server = await asyncio.start_server(tcp, bind, port, limit=4096)
+        except OSError: udp.close(); raise
+        return udp, server
+
+
 # ---------------------------------------------------------------- the watch
 
 
@@ -914,6 +1070,9 @@ class AnchorWatch:
         self.frozen = set()                # sources whose position stopped changing (FROZEN_S)
         self.gps_list = []                 # every position source, for the page
         self.gps_seen = {}                 # every GPS source ever seen: src -> {"name", "first", "last"} (kept in the state file)
+        self.away = set()                  # network GPS far from every other active GPS: not used
+        self.nmea_on = False               # network GPS listener running (off with --no-nmea, e.g. test servers)
+        self.netgps = NetGPS(store, on_event=lambda text, kind: self.event(text, kind=kind), on_new=self.net_gps_new)
         self.core_down_since = None
         self.started = time.time()
         self.dirty = False
@@ -941,13 +1100,16 @@ class AnchorWatch:
         self.gps_seen = {str(k): v for k, v in (d.get("gps_seen") or {}).items() if isinstance(v, dict)}
         self.nfl_sent = d.get("nfl_sent") if isinstance(d.get("nfl_sent"), dict) else None
         if isinstance(d.get("core_boot"), (int, float)): self.core_boot = d["core_boot"]
+        if isinstance(d.get("net_gps"), dict):
+            self.netgps.sources = {str(ip): str(s) for ip, s in d["net_gps"].items() if str(s).isdigit()}
         if self.anchor: log.info("anchor watch restored: %.6f, %.6f radius %.0f m", self.anchor["lat"], self.anchor["lon"], self.anchor["radius"])
 
     def save(self):
         with self.lock:
             d = {"settings": self.settings, "anchor": self.anchor, "max_dist": self.max_dist,
                  "track": list(self.track), "events": list(self.events), "last_depth": self.last_depth, "gps_seen": self.gps_seen,
-                 "nfl_sent": self.nfl.sent if self.nfl is not None else self.nfl_sent, "core_boot": self.core_boot}
+                 "nfl_sent": self.nfl.sent if self.nfl is not None else self.nfl_sent, "core_boot": self.core_boot,
+                 "net_gps": dict(self.netgps.sources)}
             self.dirty = False
         tmp = self.state_file.with_suffix(".tmp")
         tmp.write_text(json.dumps(d, separators=(",", ":")), encoding="utf-8"); os.replace(tmp, self.state_file)
@@ -987,6 +1149,14 @@ class AnchorWatch:
                            and src not in frozen and now - self.pos_seen[("gnss", src)][2] >= HOLD_SOON_S
                            and src in self.dt_seen and now - self.dt_seen[src][1] <= FRESH_S
                            and dist_bearing_m(srcs[src]["lat"], srcs[src]["lon"], gsrcs[src]["lat"], gsrcs[src]["lon"])[0] <= HOLD_NEAR_M}
+            # a phone that went ashore in the dinghy: a network GPS far from every other active GPS is not used
+            others = [c for src, c in srcs.items() if not self.netgps.is_net(src) and c["age"] <= FRESH_S]
+            away = {src for src, c in srcs.items() if self.netgps.is_net(src) and c["age"] <= FRESH_S and others
+                    and min(dist_bearing_m(c["lat"], c["lon"], o["lat"], o["lon"])[0] for o in others) > NET_AWAY_M}
+            for src in away - self.away:
+                self.event(f"GPS {self.source_name(src)} is more than {NET_AWAY_M} m from the other GPS: not used (taken off the boat?)", now, "warn")
+            for src in self.away - away:
+                if src in srcs and srcs[src]["age"] <= FRESH_S: self.event(f"GPS {self.source_name(src)} is back near the other GPS", now, "ok")
             route = self.route_state(sensors)
             if route != self.route_seen:
                 if route and self.route_seen:
@@ -1031,14 +1201,14 @@ class AnchorWatch:
                 for src in (frozen | raw) - set(self.diag): self.start_diag(src, now)
                 self.record_diag(sensors, now)
             self.hold_was = self.hold_soon
-            self.frozen, self.raw, self.hold, self.hold_soon = frozen, raw, hold, soon
-            boat = read_boat(sensors, now, prefs, frozen, float(s["transducer_depth"]), raw, soon); self.boat = boat; pos = boat["pos"]
+            self.frozen, self.raw, self.hold, self.hold_soon, self.away = frozen, raw, hold, soon, away
+            boat = read_boat(sensors, now, prefs, frozen | away, float(s["transducer_depth"]), raw, soon); self.boat = boat; pos = boat["pos"]
             if pos: pos["hold"] = pos["source"] in soon
             if boat["depth"] is not None:
                 if not self.last_depth or now - self.last_depth["t"] >= 60: self.dirty = True       # persisted about once a minute
                 self.last_depth = {"d": boat["depth"], "t": now, "lat": pos["lat"] if pos else None, "lon": pos["lon"] if pos else None}
             self.gps_list = [{"source": src, "name": self.source_name(src), "sats": c["sats"], "hdop": c["hdop"],
-                              "age": round(c["age"], 1), "frozen": src in frozen, "raw": src in raw, "hold": src in soon, "in_use": bool(pos and pos["source"] == src)}
+                              "age": round(c["age"], 1), "frozen": src in frozen, "raw": src in raw, "hold": src in soon, "away": src in away, "in_use": bool(pos and pos["source"] == src)}
                              for src, c in sorted(srcs.items(), key=lambda kv: (kv[0] != CORE_SOURCE, int(kv[0])))]
             for src, c in srcs.items():
                 if c["age"] > FRESH_S: continue
@@ -1196,7 +1366,7 @@ class AnchorWatch:
         rows = []
         for i, src in enumerate(prefs + rest):
             g, seen = live.get(src), self.gps_seen.get(src)
-            if g: status = "in_use" if g["in_use"] else "frozen" if g["frozen"] else "hold" if g["hold"] else "raw" if g["raw"] else "active"
+            if g: status = "in_use" if g["in_use"] else "away" if g.get("away") else "frozen" if g["frozen"] else "hold" if g["hold"] else "raw" if g["raw"] else "active"
             else: status = "inactive" if seen else "never"
             rows.append({"source": src, "name": (g or {}).get("name") or (seen or {}).get("name") or self.source_name(src), "status": status,
                          "sats": g["sats"] if g and g["sats"] is not None and 0 < g["sats"] < 100 else None,   # 253-255 = not available (NMEA 2000)
@@ -1204,8 +1374,13 @@ class AnchorWatch:
                          "last_seen": None if g or not seen else round(now - seen["last"]), "listed": src in prefs})
         return rows
 
+    def net_gps_new(self, ip, src):
+        self.event(f"Network GPS from {ip} (NMEA over the LAN) is source {src}"); self.dirty = True
+
     def source_name(self, src):
         if src == CORE_SOURCE: return "254 (Orca Core 2)"
+        ip = self.netgps.ip_of(src)
+        if ip: return f"{src} (Network GPS {ip})"
         label = self.store.source_label(src)
         label = " ".join(re.sub(r"\s*(https?://|www\.)\S+", "", label or "").split())   # some devices put their web address in the model name
         return f"{src} ({label})" if label and not label.startswith("Source ") else str(src)
@@ -1257,6 +1432,12 @@ class AnchorWatch:
                     elif k == "own_mmsi":
                         v = str(v).strip()
                         if v and not (v.isdigit() and len(v) == 9): raise ValueError("My MMSI must be 9 digits (or empty)")
+                    elif k == "nmea_port":
+                        try: f = float(v); v = int(f)
+                        except (TypeError, ValueError, OverflowError): raise ValueError("NMEA port must be a whole number") from None
+                        if f != v: raise ValueError("NMEA port must be a whole number")
+                        lo, hi = SETTING_LIMITS[k]
+                        if not lo <= v <= hi: raise ValueError(f"NMEA port must be between {lo} and {hi}")
                     elif isinstance(DEFAULTS[k], str): v = ",".join(x.strip() for x in str(v).split(",") if x.strip().isdigit())
                     else:
                         lo, hi = SETTING_LIMITS[k]; v = float(v)
@@ -1290,6 +1471,19 @@ class AnchorWatch:
                 err = self.netais.reload()
                 if err: raise ValueError(f"Internet AIS is not set up: {err}")
                 self.event("Internet AIS: key re-read, reconnecting", now)
+            elif act == "gps_forget":
+                src = str(c.get("source", "")).strip()
+                if not src: raise ValueError("No GPS given")
+                if any(g["source"] == src and g["age"] <= FRESH_S for g in self.gps_list):
+                    raise ValueError(f"GPS {self.source_name(src)} is active: only a GPS that is not active can be removed")
+                name = (self.gps_seen.get(src) or {}).get("name") or self.source_name(src)
+                self.gps_seen.pop(src, None); self.netgps.forget(src)
+                prefs = [x.strip() for x in str(s["gps_sources"]).split(",") if x.strip()]
+                if src in prefs: s["gps_sources"] = ",".join(p for p in prefs if p != src)
+                with self.store.lock:
+                    for k in [k for k in self.store.values["sensors"] if k.startswith("navigation.") and k.split(".")[2:3] == [src]]:
+                        del self.store.values["sensors"][k]
+                self.event(f"GPS {name} removed from the list (it comes back if it is seen again)", now); self.dirty = True
             elif act == "nfl_send":
                 if self.nfl is None: raise ValueError("noforeignland.com tracking is not available")
                 err = self.nfl.reload()
@@ -1332,6 +1526,7 @@ class AnchorWatch:
                            "last_ok": self.nfl.last_ok if self.nfl else None, "last_count": self.nfl.last_count if self.nfl else 0,
                            "last_error": self.nfl.last_error if self.nfl else None,
                            "sent_t": (self.nfl.sent or {}).get("t") if self.nfl else None},
+                   "nmea": {"on": self.nmea_on, "port": self.netgps.port, "error": self.netgps.error},
                    "track_points": len(self.track), "track_start": self.track[0][0] if self.track else None, "version": VERSION,
                    "gps_age": now - self.last_pos_t if self.last_pos_t else None}
             if a and pos:
@@ -1552,6 +1747,8 @@ def main():
     ap.add_argument("--aisstream", default=str(HERE / "aisstream.json"), help="aisstream.io key for internet AIS (see aisstream.example.json)")
     ap.add_argument("--nfl", default=str(HERE / "nfl.json"), help="noforeignland.com boat tracking keys (see nfl.example.json)")
     ap.add_argument("--recordings", default=str(HERE / "recordings"), help="folder for the GPS diagnostics (held GPS, Core GPS log)")
+    ap.add_argument("--no-nmea", action="store_true",
+                    help="do not listen for network GPS (NMEA 0183 over UDP/TCP, e.g. GPS2IP); the port is a setting on the page")
     ap.add_argument("--tide-cache", default=str(HERE / "tide_cache.json"), help="local copy of the tide forecast (works offline)")
     a = ap.parse_args()
     check_bind(a.bind)
@@ -1590,6 +1787,8 @@ def main():
         tasks = [stream_loop(store, "sensors", f"ws://{a.host}:8089" + SENSORS_PATH.format(ms=1000), None), watch_loop(watch),
                  devices_loop(store, a.host), core_info_loop(watch, a.host), watch.netais.run(), watch.tide.run()]
         if not a.no_ais: tasks.append(stream_loop(store, "ais", f"ws://{a.host}:8089" + AIS_PATH, None))
+        if not a.no_nmea:
+            watch.nmea_on = True; tasks.append(watch.netgps.run(a.bind, lambda: int(watch.settings["nmea_port"])))
         await asyncio.gather(*tasks)
     try: asyncio.run(run())
     except KeyboardInterrupt: pass

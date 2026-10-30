@@ -57,6 +57,7 @@ h1 .logo{flex:none;border-radius:7px}
 .gpslist .garr{display:flex;gap:6px;flex:none}
 .gpslist .garr button{min-height:40px;min-width:40px;padding:0;font-size:16px;line-height:1}
 .gpslist .garr button:disabled{opacity:.3;cursor:default}
+.gpslist .garr button.grm{color:var(--bad)}
 .credits ul{margin:0;padding-left:18px;font-size:13px;line-height:1.7}
 .credits a{color:var(--accent)}
 .mapinfo{position:absolute;right:10px;bottom:10px;z-index:500;width:26px;height:26px;min-height:26px;padding:0;border-radius:50%;font:600 14px/1 Georgia,serif;opacity:.9}
@@ -370,11 +371,15 @@ input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offse
       <h3>GPS sources</h3>
       <div class="note" id="gpsInfo" style="margin:0 0 8px"></div>
       <ol class="gpslist" id="gpsList"></ol>
+      <div class="row" style="margin-top:10px">
+        <label class="f">NMEA port (phone GPS)<input type="number" data-s="nmea_port" min="1024" max="65535" step="1"></label>
+      </div>
+      <div class="note" id="nmeaStatus" style="margin-top:4px"></div>
       <div class="row" style="justify-content:space-between;align-items:center;margin-top:10px">
         <span class="note" style="margin:0">Order is saved straight away.</span>
         <button class="small" id="gpsDefault">Default order</button>
       </div>
-      <p class="note">Tried from top to bottom: the first active GPS is used and the next one takes over when it stops. 254 is the Orca Core's own GPS. A GPS whose position has not changed for 60 s uses its own GNSS fix while that still changes; if that has not changed either it counts as frozen and is skipped. Exception: the Orca Core (254) keeps its fix while the boat lies still and moves it on after about 10 m; it stays usable (shown as hold), but a live GPS is preferred over it.</p>
+      <p class="note">Tried from top to bottom: the first active GPS is used and the next one takes over when it stops. 254 is the Orca Core's own GPS. A GPS whose position has not changed for 60 s uses its own GNSS fix while that still changes; if that has not changed either it counts as frozen and is skipped. Exception: the Orca Core (254) keeps its fix while the boat lies still and moves it on after about 10 m; it stays usable (shown as hold), but a live GPS is preferred over it. A GPS that is not active can be removed with ✕ (for example an old address of the same device); it comes back if it is seen again. A phone or tablet with GPS2IP shows up as <i>Network GPS</i>; it is skipped while it is more than 100 m from the other active GPS (taken ashore).</p>
     </section>
     <section class="card credits" id="credits">
       <h3>Credits</h3>
@@ -520,6 +525,11 @@ function render(){
     :(na.last_error?`<span style="color:var(--bad)">${esc(na.last_error)}</span> `:'')
      +(na.connected?`Connected · ${na.ships} ship${na.ships===1?'':'s'} in the area${na.last_message?' · last report '+clock(na.last_message):''}.`:'Connecting…')
      +' Ships from the own AIS receiver always take priority; internet ships are drawn hollow.';
+  const nm=S.nmea||{}, nmst=$('nmeaStatus'),
+    nmtxt=!nm.on?'Network GPS is off on this server.'
+      :nm.error?`<span style="color:var(--bad)">${esc(nm.error)}</span>`
+      :nm.port?`Listening on port ${nm.port} (UDP and TCP) for NMEA from a phone or tablet, e.g. GPS2IP. Saved with <b>Save settings</b>.`:'Opening the port…';
+  if(nmst.innerHTML!==nmtxt)nmst.innerHTML=nmtxt;
   const nf=S.nfl||{}, nfst=$('nflStatus');
   nfst.innerHTML=!nf.configured?'Not set up: put your Boat API key and the NFL integration key in <b>nfl.json</b> on the watch PC (see nfl.example.json), then press <b>Send now</b>.'
     :!S.settings.nfl_tracking&&!S.settings.nfl_on_anchor?'Off.'
@@ -785,7 +795,9 @@ $('aliveCheck').onclick=()=>cmd({action:'alive_check'},$('settingsMsg')).then(ok
 // GPS sources: every source ever seen, in the order they are tried; the arrows move one up or down (saved straight away)
 const GPS_STATUS={in_use:['ok','<span class="ok">Active</span>'],active:['ok','<span class="ok">Active</span>, standby'],
   hold:['warn','<span class="warn">Active, on hold</span> (within 10 m)'],raw:['warn','<span class="warn">Active</span>, own GNSS fix'],
-  frozen:['bad','<span class="bad">Frozen</span>, skipped'],inactive:['off','Not active'],never:['never','Never seen']};
+  frozen:['bad','<span class="bad">Frozen</span>, skipped'],away:['bad','<span class="bad">Far from the other GPS</span>, skipped (off the boat?)'],
+  inactive:['off','Not active'],never:['never','Never seen']};
+const gpsRemovable=r=>['inactive','never'].includes(r.status);
 function renderGps(){
   const rows=S.gps_rows||[], use=rows.find(r=>r.status==='in_use'), list=$('gpsList');
   const info=use?`In use: <b>${esc(use.name)}</b>${use.sats?' · '+use.sats+' sats':''}${use.hdop!=null?' · HDOP '+use.hdop:''}`
@@ -797,7 +809,7 @@ function renderGps(){
     return {cls:r.status==='in_use'?'use':act?'':'off', dot:'gdot '+dot,
       txt:`<div class="gname">${esc(r.name)}${r.status==='in_use'?'<span class="guse">IN USE</span>':''}</div><div class="gstat">${txt}${det?' · '+esc(det):''}</div>`}};
   const items=[...list.querySelectorAll('li[data-src]')];
-  if(rows.length&&items.length===rows.length&&items.every((li,i)=>li.dataset.src===rows[i].source)){
+  if(rows.length&&items.length===rows.length&&items.every((li,i)=>li.dataset.src===rows[i].source&&li.dataset.rm===String(gpsRemovable(rows[i])))){
     // same order: update the texts only, so the arrow buttons stay put while someone taps them
     rows.forEach((r,i)=>{const p=part(r), li=items[i];
       if(li.className!==p.cls)li.className=p.cls;
@@ -806,14 +818,21 @@ function renderGps(){
     return;
   }
   list.innerHTML=rows.map((r,i)=>{const p=part(r);
-    return `<li class="${p.cls}" data-src="${esc(r.source)}"><span class="gnum">${i+1}</span><span class="${p.dot}"></span><div class="gtxt">${p.txt}</div>`
-      +`<span class="garr"><button data-mv="${i}" data-d="-1" aria-label="Move ${esc(r.name)} up"${i?'':' disabled'}>▲</button>`
+    return `<li class="${p.cls}" data-src="${esc(r.source)}" data-rm="${gpsRemovable(r)}"><span class="gnum">${i+1}</span><span class="${p.dot}"></span><div class="gtxt">${p.txt}</div>`
+      +`<span class="garr">${gpsRemovable(r)?`<button class="grm" data-rm-src="${esc(r.source)}" aria-label="Remove ${esc(r.name)}" title="Remove from the list">✕</button>`:''}`
+      +`<button data-mv="${i}" data-d="-1" aria-label="Move ${esc(r.name)} up"${i?'':' disabled'}>▲</button>`
       +`<button data-mv="${i}" data-d="1" aria-label="Move ${esc(r.name)} down"${i<rows.length-1?'':' disabled'}>▼</button></span></li>`}).join('')
     ||'<li><span class="gtxt note" style="margin:0">No GPS seen yet</span></li>';
 }
 function saveGpsOrder(order){
   cmd({action:'settings',settings:{gps_sources:order}},$('settingsMsg')).then(ok=>{if(ok){S.settings.gps_sources=order;$('settingsMsg').textContent='GPS order saved'}})}
-$('gpsList').onclick=e=>{const b=e.target.closest('button[data-mv]');if(!b||b.disabled)return;
+$('gpsList').onclick=e=>{
+  const rm=e.target.closest('button[data-rm-src]');
+  if(rm){const r=(S.gps_rows||[]).find(x=>x.source===rm.dataset.rmSrc);
+    if(r&&confirm(`Remove ${r.name} from the list? It comes back if it is seen again.`))
+      cmd({action:'gps_forget',source:r.source},$('settingsMsg')).then(ok=>{if(ok){S.gps_rows=S.gps_rows.filter(x=>x.source!==r.source);renderGps();$('settingsMsg').textContent=r.name+' removed'}});
+    return}
+  const b=e.target.closest('button[data-mv]');if(!b||b.disabled)return;
   const src=(S.gps_rows||[]).map(r=>r.source), i=+b.dataset.mv, j=i+(+b.dataset.d);if(j<0||j>=src.length)return;
   [src[i],src[j]]=[src[j],src[i]];
   const r=S.gps_rows;[r[i],r[j]]=[r[j],r[i]];renderGps();                  // show the move at once, the next update confirms it

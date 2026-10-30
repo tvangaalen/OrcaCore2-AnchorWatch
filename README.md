@@ -102,6 +102,30 @@ Without an API key, change the period on the website whenever you change the int
 you). If you shut the watch PC down on purpose, pause the check on healthchecks.io (or set the interval to 0 first
 when the API key is in place), otherwise it alerts after the interval.
 
+### Phone or tablet as GPS (GPS2IP)
+
+An iPhone or iPad with GPS (an iPad needs the cellular model; a Wi-Fi-only iPad has no GPS) can be a GPS source.
+The app [GPS2IP](https://apps.apple.com/app/id408625926) sends the device's position as NMEA 0183 over the boat
+Wi-Fi, also in the background with the screen off. The watch listens on port 10110 (UDP and TCP) of its own address; the port is a setting.
+
+In GPS2IP:
+1. **Settings > Connection Method**: choose **UDP Push**; IP address = the watch PC (the address in
+   `start_anchor_watch.cmd`, e.g. 192.168.1.166), port **10110**. (TCP Push to the same address and port works too.)
+   The port can be changed in the watch under Settings > GPS sources (*NMEA port*); the listener moves at once.
+2. **NMEA messages**: switch on **GGA** and **RMC**; the others are ignored.
+3. **Background / keep running**: on, so it keeps sending while the phone sleeps; auto-resume after a restart on.
+   Keep the phone on a charger: background GPS uses a lot of battery.
+4. Switch GPS2IP on. In the watch, Settings > GPS sources shows *300 (Network GPS 192.168.1.x)*; move it where you
+   want it in the order. Each phone or tablet gets its own number (300, 301, ...), kept by its IP address, so give
+   it a fixed address in the UniFi console if you can.
+
+It is handled like any other GPS: a position that does not change for 60 s counts as frozen. GPS2IP re-sends up
+to 600 stored messages after a reconnect; the watch only takes a sentence whose own GPS time is within 30 s of the
+PC's clock. A phone goes ashore in the dinghy, so a network GPS more than 100 m from every other active GPS is
+skipped (*far from the other GPS*); with no other GPS active it is used as it is. Only senders on the private LAN
+are accepted. GPS2IP's free Lite version is said to lack some functions; buy the full version if UDP Push is
+missing.
+
 ### What it does
 
 - **Two screens:** the anchor watch (alarm banner, map, tiles, drop/watch controls) and **Settings** behind the gear
@@ -232,8 +256,10 @@ when the API key is in place), otherwise it alerts after the interval.
 ```
 .venv\Scripts\python.exe anchor_watch.py [--host 192.168.1.124] [--bind 127.0.0.1] [--port 8766]
     [--certfile certs\server-cert.pem --keyfile certs\server-key.pem] [--state anchor_state.json]
-    [--tile-cache tile_cache] [--no-ais]
+    [--tile-cache tile_cache] [--no-ais] [--no-nmea]
 ```
+
+`--no-nmea` switches the network GPS listener off (the test servers use it); its port is a setting on the page.
 
 Without `--certfile/--keyfile` it serves plain HTTP (development only; phones then get no wake lock).
 

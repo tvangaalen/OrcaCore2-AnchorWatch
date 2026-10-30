@@ -3,7 +3,7 @@
 import tempfile, unittest
 from pathlib import Path
 
-import asyncio, io, json, math, os, time, urllib.error, urllib.parse
+import asyncio, io, json, math, os, socket, time, urllib.error, urllib.parse
 from datetime import datetime, timezone
 from unittest import mock
 
@@ -233,6 +233,95 @@ class AnchorWatchTest(unittest.TestCase):
             self.w.save(); w2 = AnchorWatch(self.s.store, self.w.state_file)              # the boot time survives a restart
             self.assertAlmostEqual(w2.core_boot, t + 370, delta=1)
         finally: d.cleanup()
+
+    def nmea(self, lat, lon, t=None, kind="RMC", valid=True):
+        # one NMEA 0183 sentence as GPS2IP sends it, with checksum, for time t (default: now)
+        u = datetime.fromtimestamp(self.s.t if t is None else t, timezone.utc)
+        la, lo = abs(lat), abs(lon)
+        lat_s = f"{int(la):02d}{(la - int(la)) * 60:07.4f},{'N' if lat >= 0 else 'S'}"
+        lon_s = f"{int(lo):03d}{(lo - int(lo)) * 60:07.4f},{'E' if lon >= 0 else 'W'}"
+        if kind == "RMC": body = f"GPRMC,{u:%H%M%S}.00,{'A' if valid else 'V'},{lat_s},{lon_s},0.1,0.0,{u:%d%m%y},,"
+        else: body = f"GPGGA,{u:%H%M%S}.00,{lat_s},{lon_s},{1 if valid else 0},09,0.9,1.0,M,0.0,M,,"
+        x = 0
+        for ch in body: x ^= ord(ch)
+        return f"${body}*{x:02X}\r\n"
+
+    def phone(self, lat, lon, ip="192.168.1.107"):
+        lat += (int(self.s.t) % 3) * 3e-6                   # a real receiver jitters (NMEA has 0.0001 minute = ~0.2 m)
+        return self.w.netgps.feed(ip, self.nmea(lat, lon) + self.nmea(lat, lon, kind="GGA"), self.s.t)
+
+    def test_network_gps_parses_rmc_and_gga(self):
+        n = self.w.netgps
+        r = n.parse(self.nmea(-33.5, 151.25)); self.assertEqual(r["type"], "RMC"); self.assertTrue(r["valid"])
+        self.assertAlmostEqual(r["lat"], -33.5, places=5); self.assertAlmostEqual(r["lon"], 151.25, places=5)
+        g = n.parse(self.nmea(10, -20, kind="GGA")); self.assertEqual((g["sats"], g["hdop"]), (9, 0.9)); self.assertAlmostEqual(g["lon"], -20, places=5)
+        bad = self.nmea(10, 20); self.assertIsNone(n.parse(bad.replace("*", "0*", 1)))          # checksum wrong
+        self.assertIsNone(n.parse("$GPRMC,no,checksum")); self.assertIsNone(n.parse("$GPGSV,1,1,00*79"))
+
+    def test_network_gps_is_a_source_and_old_or_public_messages_are_not_used(self):
+        self.w.command({"action": "settings", "settings": {"gps_sources": "4,127"}})
+        self.assertEqual(self.w.netgps.feed("192.168.1.107", self.nmea(LAT, LON, t=self.s.t - 300), self.s.t), 0)   # re-sent, stored
+        self.assertEqual(self.w.netgps.feed("8.8.8.8", self.nmea(LAT, LON), self.s.t), 0)                          # not from the LAN
+        self.s.t += 11                                          # the simulated receiver from setUp is gone
+        for _ in range(70): self.phone(LAT, LON); self.w.tick(self.s.t); self.s.t += 1
+        pos = self.w.boat["pos"]; self.assertEqual(pos["source"], "300"); self.assertEqual(self.w.netgps.sources, {"192.168.1.107": "300"})
+        self.assertEqual(self.w.source_name("300"), "300 (Network GPS 192.168.1.107)")
+        self.assertTrue(any("Network GPS from 192.168.1.107" in e["text"] for e in self.w.events))
+        for _ in range(65):                                     # the same value over and over: frozen like any receiver
+            self.w.netgps.feed("192.168.1.107", self.nmea(LAT, LON), self.s.t); self.w.tick(self.s.t); self.s.t += 1
+        self.assertIn("300", self.w.frozen); self.assertIsNone(self.w.boat["pos"])
+        self.w.save(); w2 = AnchorWatch(self.s.store, self.w.state_file)
+        self.assertEqual(w2.netgps.sources, {"192.168.1.107": "300"})
+
+    def test_network_gps_far_from_the_boat_is_not_used(self):
+        self.w.command({"action": "settings", "settings": {"gps_sources": "300,127"}})
+        self.s.t += 11
+        for _ in range(20):
+            self.phone(*offset(LAT, LON, 90, 400)); self.s.boat(LAT, LON, src="127", frozen=False); self.w.tick(self.s.t); self.s.t += 1
+        self.assertEqual(self.w.away, {"300"}); self.assertEqual(self.w.boat["pos"]["source"], "127")
+        self.assertEqual(next(r for r in self.w.gps_rows(self.s.t) if r["source"] == "300")["status"], "away")
+        for _ in range(5):
+            self.phone(*offset(LAT, LON, 90, 5)); self.s.boat(LAT, LON, src="127", frozen=False); self.w.tick(self.s.t); self.s.t += 1
+        self.assertEqual(self.w.away, set()); self.assertEqual(self.w.boat["pos"]["source"], "300")
+        self.assertTrue(any("back near" in e["text"] for e in self.w.events))
+
+    def test_inactive_gps_can_be_removed_active_not(self):
+        self.w.command({"action": "settings", "settings": {"gps_sources": "254,127,3,4,2"}})
+        self.s.t += 11
+        for _ in range(3): self.s.boat(LAT, LON, src="3", frozen=False); self.w.tick(self.s.t); self.s.t += 1
+        self.w.gps_seen["2"] = {"name": "2 (Onwa Marine KS200A+)", "first": 1, "last": 2}
+        with self.assertRaises(ValueError): self.w.command({"action": "gps_forget", "source": "3"})
+        self.w.command({"action": "gps_forget", "source": "2"})
+        self.assertNotIn("2", self.w.gps_seen); self.assertEqual(self.w.settings["gps_sources"], "254,127,3,4")
+        self.assertNotIn("2", [r["source"] for r in self.w.gps_rows(self.s.t)])
+        self.assertTrue(any("removed from the list" in e["text"] for e in self.w.events))
+
+    def test_nmea_port_setting(self):
+        self.assertEqual(self.w.settings["nmea_port"], 10110)
+        self.w.command({"action": "settings", "settings": {"nmea_port": "10111"}}); self.assertEqual(self.w.settings["nmea_port"], 10111)
+        for bad in (80, 70000, "abc", 10110.5):
+            with self.assertRaises(ValueError): self.w.command({"action": "settings", "settings": {"nmea_port": bad}})
+
+    def test_nmea_listener_moves_with_the_port_setting(self):
+        n = self.w.netgps; port = {"p": 47110}
+
+        def send(dest):
+            u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); u.sendto(self.nmea(LAT, LON, t=time.time()).encode(), ("127.0.0.1", dest)); u.close()
+
+        async def go():
+            task = asyncio.create_task(n.run("127.0.0.1", lambda: port["p"]))
+            await asyncio.sleep(0.3); self.assertEqual(n.port, 47110)
+            send(47110); await asyncio.sleep(0.2); self.assertEqual(n.sources, {"127.0.0.1": "300"})
+            port["p"] = 47111; await asyncio.sleep(1.5); self.assertEqual(n.port, 47111)
+            n.sources.clear(); send(47110); await asyncio.sleep(0.2); self.assertEqual(n.sources, {})     # old port closed
+            send(47111); await asyncio.sleep(0.2); self.assertEqual(n.sources, {"127.0.0.1": "300"})
+            blocker = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); blocker.bind(("127.0.0.1", 47112))
+            try:
+                port["p"] = 47112; await asyncio.sleep(1.5)
+                self.assertIsNone(n.port); self.assertIn("47112", n.error)
+            finally: blocker.close()
+            task.cancel()
+        asyncio.run(go())
 
     def test_slow_zg100_gets_more_time_before_frozen(self):
         self.s.store.addr_to_name["127"] = "zg"; self.s.store.name_info["zg"] = {"manufacturer": "B & G", "modelID": "ZG100 Antenna"}

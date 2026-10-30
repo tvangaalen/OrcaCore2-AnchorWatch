@@ -21,6 +21,10 @@ Overview: `README.md`. Release history: `CHANGELOG.md`.
   never keep 254 out of the frozen check or log a hold before it is confirmed. Slow-by-design receivers may get a longer limit in `SLOW_GPS` (B&G ZG100: 100 s,
   approved by the user 2026-10-28); keep it per model and only as long as the recordings show. Tests must give
   simulated receivers jitter, or they count as frozen.
+- Network GPS (`NetGPS`, NMEA over UDP/TCP, e.g. GPS2IP on a phone) is a source like any other: never exempt it from
+  the frozen check, keep the NET_MAX_AGE_S check on the sentence's own GPS time (GPS2IP re-sends stored messages),
+  accept private-LAN senders only, and keep the NET_AWAY_M check (a phone can go ashore). Test servers run with
+  `--no-nmea`.
 - **Parse Core messages with `orca_reader.parse_message`**, never plain `json.loads`: the Core sends unescaped text.
 - The alarm logic runs on the server (`AnchorWatch.tick`); the page only displays and sends commands. Do not move
   alarm decisions into the browser.

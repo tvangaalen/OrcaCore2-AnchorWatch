@@ -4,6 +4,24 @@ All notable changes to the Orca Core 2 Anchor Watch. Newest first.
 
 ---
 
+## 1.16 — Phone as GPS, remove old GPS
+
+### 1.16.1
+- **The NMEA port is a setting** (Settings > GPS sources, default 10110). The listener moves to the new port as
+  soon as the settings are saved; if the port is in use by another program the page says so and it is retried
+  every 30 s. `--nmea-port` is replaced by `--no-nmea` (the test servers use it).
+
+### 1.16.0
+- **A phone or tablet can be a GPS source** through GPS2IP (or any app that sends NMEA 0183 over the LAN). The
+  watch listens on port 10110, UDP and TCP; RMC and GGA are read (checksum required). Every sender becomes source
+  300, 301, ... and is handled like any receiver, frozen check included. Stored messages that GPS2IP re-sends after
+  a reconnect are dropped on their own GPS time (more than 30 s off). A network GPS more than 100 m from every other
+  active GPS is skipped (phone taken ashore). Only private LAN senders. `--nmea-port` (0 = off); the test servers
+  have it off.
+- **Remove a GPS from the list**: a ✕ on every GPS that is not active (Settings > GPS sources), for example the
+  KS200A+ that showed up twice after it got a new NMEA 2000 address (2 → 3). It is also taken out of the order and
+  comes back if it is seen again.
+
 ## 1.15 — Better Orca Core hold detection
 
 ### 1.15.2
